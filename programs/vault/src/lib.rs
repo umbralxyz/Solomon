@@ -1,8 +1,5 @@
-pub mod stake;
-
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, TokenAccount};
-use anchor_spl::token::{Token, MintTo, Transfer};
+use anchor_spl::token::{self, Token, TokenAccount, Transfer, MintTo};
 declare_id!("A3p6U1p5jjZQbu346LrJb1asrTjkEPhDkfH4CXCYgpEd");
 
 #[program]
