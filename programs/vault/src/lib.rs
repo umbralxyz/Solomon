@@ -1,5 +1,7 @@
+pub mod stake;
+
 use anchor_lang::prelude::*;
-use anchor_spl::token;
+use anchor_spl::token::{self, TokenAccount};
 use anchor_spl::token::{Token, MintTo, Transfer};
 declare_id!("A3p6U1p5jjZQbu346LrJb1asrTjkEPhDkfH4CXCYgpEd");
 
@@ -13,7 +15,9 @@ pub mod vault {
         max_redeem_per_block: u64,
         exchange_rate: u64,
     ) -> Result<()> {
+        let admin = ctx.accounts.admin.key();
         let mint_state = &mut ctx.accounts.mint_state;
+        //let b = ctx.bumps.mint_state;
     
         mint_state.supported_assets = vec![];
         mint_state.max_mint_per_block = max_mint_per_block;
@@ -21,9 +25,9 @@ pub mod vault {
         mint_state.minted_per_block = 0;
         mint_state.redeemed_per_block = 0;
         mint_state.exchange_rate = exchange_rate;
-        mint_state.approved_minters = vec![mint_state.admin];
-        mint_state.approved_redeemers = vec![mint_state.admin];
-        mint_state.admin = mint_state.admin;
+        mint_state.approved_minters = vec![admin];
+        mint_state.approved_redeemers = vec![admin];
+        mint_state.admin = admin;
     
         Ok(())
     }
@@ -57,7 +61,7 @@ pub mod vault {
 
     pub fn transfer_token(ctx: Context<TransferToken>, amt: u64) -> Result<()> {
         if ctx.accounts.from_authority.key() != ctx.accounts.mint_state.admin.key() {
-            //return Err(ErrorCode::NotAdmin.into());
+            return Err(ErrorCode::NotAdmin.into());
         }
 
         // Create the Transfer struct for context
@@ -78,9 +82,9 @@ pub mod vault {
         Ok(())
     }
 
-    pub fn whitelist_minter(ctx: Context<WhitelistMinter>, minter: Pubkey) -> Result<()> {
-        if ctx.accounts.admin.key() != ctx.accounts.mint_state.admin {
-            //return Err(ErrorCode::NotAdmin.into());
+    pub fn whitelist_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
+        if !ctx.accounts.mint_state.managers.contains(&ctx.accounts.caller.key()) {
+            return Err(ErrorCode::NotManager.into());
         }
 
         let approved_minters = &mut ctx.accounts.mint_state.approved_minters;
@@ -94,9 +98,9 @@ pub mod vault {
         Ok(())
     }
 
-    pub fn remove_minter(ctx: Context<RemoveMinter>, minter: Pubkey) -> Result<()> {
-        if ctx.accounts.admin.key() != ctx.accounts.mint_state.admin {
-            return Err(ErrorCode::NotAdmin.into());
+    pub fn remove_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
+        if !ctx.accounts.mint_state.managers.contains(&ctx.accounts.caller.key()) {
+            return Err(ErrorCode::NotManager.into());
         }
 
         let approved_minters = &mut ctx.accounts.mint_state.approved_minters;
@@ -110,9 +114,9 @@ pub mod vault {
         Ok(())
     }
 
-    pub fn whitelist_redeemer(ctx: Context<WhitelistRedeemer>, redeemer: Pubkey) -> Result<()> {
-        if ctx.accounts.admin.key() != ctx.accounts.mint_state.admin {
-            return Err(ErrorCode::NotAdmin.into());
+    pub fn whitelist_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
+        if !ctx.accounts.mint_state.managers.contains(&ctx.accounts.caller.key()) {
+            return Err(ErrorCode::NotManager.into());
         }
 
         let approved_redeemers = &mut ctx.accounts.mint_state.approved_redeemers;
@@ -126,9 +130,9 @@ pub mod vault {
         Ok(())
     }
 
-    pub fn remove_redeemer(ctx: Context<RemoveRedeemer>, redeemer: Pubkey) -> Result<()> {
-        if ctx.accounts.admin.key() != ctx.accounts.mint_state.admin {
-            return Err(ErrorCode::NotAdmin.into());
+    pub fn remove_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
+        if !ctx.accounts.mint_state.managers.contains(&ctx.accounts.caller.key()) {
+            return Err(ErrorCode::NotManager.into());
         }
 
         let approved_redeemers = &mut ctx.accounts.mint_state.approved_redeemers;
@@ -139,6 +143,49 @@ pub mod vault {
             return Err(ErrorCode::RedeemerNotWhitelisted.into())
         }
         
+        Ok(())
+    }
+
+    pub fn add_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
+        if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
+            return Err(ErrorCode::NotAdmin.into());
+        }
+
+        let managers = &mut ctx.accounts.mint_state.managers;
+
+        if !managers.contains(&manager) {
+            managers.push(manager);
+        } else {
+            return Err(ErrorCode::AlreadyManager.into());
+        }
+
+        Ok(())
+    }
+
+    pub fn remove_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
+        if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
+            return Err(ErrorCode::NotAdmin.into());
+        }
+
+        let managers = &mut ctx.accounts.mint_state.managers;
+
+        if let Some(i) = managers.iter().position(|&x| x == manager) {
+            managers.swap_remove(i);
+        } else {
+            return Err(ErrorCode::NotManagerYet.into());
+        }
+
+        Ok(())
+    }
+
+    pub fn transfer_admin(ctx: Context<TransferAdmin>, new_admin: Pubkey) -> Result<()> {
+        if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
+            return Err(ErrorCode::NotAdmin.into());
+        }
+
+        let mint_state = &mut ctx.accounts.mint_state;
+        mint_state.admin = new_admin;
+
         Ok(())
     }
 
@@ -154,6 +201,7 @@ pub mod vault {
         Ok(())
     }
 
+  
 }
 
 #[derive(Accounts)]
@@ -175,9 +223,8 @@ pub struct MintToken<'info> {
 #[derive(Accounts)]
 pub struct TransferToken<'info> {
     pub token_program: Program<'info, Token>,
-    /// CHECK: The associated token account that we are transferring the token from
     #[account(mut)]
-    pub from: UncheckedAccount<'info>,
+    pub from: Account<'info, TokenAccount>,
     /// CHECK: The associated token account that we are transferring the token to
     #[account(mut)]
     pub to: AccountInfo<'info>,
@@ -188,54 +235,53 @@ pub struct TransferToken<'info> {
 }
 
 #[derive(Accounts)]
-pub struct WhitelistMinter<'info> {
+pub struct Minters<'info> {
     #[account(mut)]
     pub mint_state: Account<'info, MintState>,
     /// CHECK: The owner of the token contract
     #[account(signer)]
-    pub admin: AccountInfo<'info>,
+    pub caller: Signer<'info>,
 }
 
 #[derive(Accounts)]
-pub struct RemoveMinter<'info> {
+pub struct Redeemers<'info> {
     #[account(mut)]
     pub mint_state: Account<'info, MintState>,
     /// CHECK: The owner of the token contract
     #[account(signer)]
-    pub admin: AccountInfo<'info>,
+    pub caller: Signer<'info>,
 }
 
 #[derive(Accounts)]
-pub struct WhitelistRedeemer<'info> {
+pub struct Managers<'info> {
     #[account(mut)]
     pub mint_state: Account<'info, MintState>,
-    /// CHECK: The owner of the token contract
     #[account(signer)]
-    pub admin: AccountInfo<'info>,
+    pub caller: Signer<'info>,
 }
 
 #[derive(Accounts)]
-pub struct RemoveRedeemer<'info> {
+pub struct TransferAdmin<'info> {
     #[account(mut)]
     pub mint_state: Account<'info, MintState>,
-    /// CHECK: The owner of the token contract
     #[account(signer)]
-    pub admin: AccountInfo<'info>,
+    pub caller: Signer<'info>
 }
-
 
 #[derive(Accounts)]
 pub struct SetMaxMintPerBlock<'info> {
     #[account(mut)]
     pub mint_state: Account<'info, MintState>,
-    pub admin: Signer<'info>,
+    #[account(signer)]
+    pub caller: Signer<'info>,
 }
 
 #[derive(Accounts)]
 pub struct SetMaxRedeemPerBlock<'info> {
     #[account(mut)]
     pub mint_state: Account<'info, MintState>,
-    pub admin: Signer<'info>,
+    #[account(signer)]
+    pub caller: Signer<'info>,
 }
 
 #[account]
@@ -248,12 +294,13 @@ pub struct MintState {
     pub exchange_rate: u64, 
     pub approved_minters: Vec<Pubkey>,
     pub approved_redeemers: Vec<Pubkey>,
+    pub managers: Vec<Pubkey>,
     pub admin: Pubkey,
 }
 
 #[derive(Accounts)]
 pub struct InitializeMintState<'info> {
-    #[account(init, payer = admin, space = 1024)]
+    #[account(init_if_needed, payer = admin, space = 1024, seeds = [b"mint-state"], bump)]
     pub mint_state: Account<'info, MintState>,
     #[account(mut, signer)]
     pub admin: Signer<'info>,
@@ -283,4 +330,10 @@ pub enum ErrorCode {
     MaxMintPerBlockExceeded,
     #[msg("The redeemer is not whitelisted")]
     RedeemerNotWhitelisted,
+    #[msg("The provided key is not yet a manager")]
+    NotManagerYet,
+    #[msg("The provided key is already a manager")]
+    AlreadyManager,
+    #[msg("The caller is not a manager")]
+    NotManager,
 }
