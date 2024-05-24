@@ -83,17 +83,20 @@ pub mod vault {
 
         token::transfer(cpi_ctx, collat)?;
 
-        // Transfer collat to redeemer
-        let transfer_instruction = Transfer{
-            from: ctx.accounts.mint_collat_vault.to_account_info(),
-            to: ctx.accounts.caller_collat.to_account_info(),
-            authority: ctx.accounts.vault_authority.to_account_info(),
-        };
-         
-        let cpi_program = ctx.accounts.collat_program.to_account_info();
-        let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
+        // TODO: call mint after deposit
+        /*
+        let mint_ctx = Context::new(
+            MintToken {
+                mint: ctx.accounts.mint.clone(),
+                token_program: ctx.accounts.token_program.clone(),
+                recipient: ctx.accounts.caller_token.clone(),
+                authority: ctx.accounts.vault_authority.clone(),
+                mint_state: ctx.accounts.mint_state.clone(),
+            }
+        );
 
-        token::transfer(cpi_ctx, collat)?;
+        mint_token(mint_ctx, collat)?;
+        */
         
         Ok(())
     }
@@ -324,19 +327,6 @@ pub struct Deposit<'info> {
     /// CHECK: the token to mint
     #[account(mut)]
     pub mint: Account<'info, Mint>,
-}
-
-impl<'info> Deposit<'info> {
-    pub fn mint_to_context(&self) -> CpiContext<'_, '_, '_, 'info, MintToken<'info>> {
-        let cpi_accounts = MintToken {
-            mint: self.mint.clone(),
-            token_program: self.token_program.clone(),
-            recipient: self.caller_token.clone(),
-            authority: self.vault_authority.clone(),
-            mint_state: self.mint_state.clone(),
-        };
-        CpiContext::new(self.token_program.to_account_info(), cpi_accounts)
-    }
 }
 
 #[derive(Accounts)]
