@@ -38,24 +38,28 @@ pub mod stake {
             cooldown.cooldown_end = 0;
             cooldown.underlying_amount = 0;
 
-            let cpi_accounts = Transfer {
-                from: ctx.accounts.user_staked_token_account.to_account_info(),
-                to: ctx.accounts.vault_staked_token_account.to_account_info(),
+            // Transfer staked tokens to vault
+            let transfer_instruction = Transfer {
+                from: ctx.accounts.user_staked_account.to_account_info(),
+                to: ctx.accounts.vault_staked_account.to_account_info(),
                 authority: ctx.accounts.user.to_account_info(),
             };
-            let cpi_program = ctx.accounts.token_program.to_account_info();
-            let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+
+            let cpi_program = ctx.accounts.staked_program.to_account_info();
+            let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
+
             token::transfer(cpi_ctx, assets)?;
 
-            let cpi_accounts = Transfer {
+            // Transfer token to caller
+            let transfer_instruction = Transfer {
                 from: ctx.accounts.vault_token_account.to_account_info(),
                 to: ctx.accounts.user_token_account.to_account_info(),
                 authority: ctx.accounts.vault.to_account_info(),
             };
+
             let cpi_program = ctx.accounts.token_program.to_account_info();
-            let seeds = &[b"vault".as_ref(), &[ctx.accounts.vault_state.vault_bump]];
-            let signer = &[&seeds[..]];
-            let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+            let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
+
             token::transfer(cpi_ctx, assets)?;
         } else {
             return Err(StakeError::TooSoon.into());
@@ -168,17 +172,17 @@ pub struct Unstake<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
     #[account(mut)]
-    pub user_staked_token_account: Account<'info, TokenAccount>,
+    pub vault: Signer<'info>,
     #[account(mut)]
-    pub vault_staked_token_account: Account<'info, TokenAccount>,
+    pub user_staked_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub vault_staked_account: Account<'info, TokenAccount>,
     #[account(mut)]
     pub user_token_account: Account<'info, TokenAccount>,
     #[account(mut)]
     pub vault_token_account: Account<'info, TokenAccount>,
-    /// CHECK: vault account to authorize unstaking
-    #[account(seeds = [b"vault"], bump)]
-    pub vault: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
+    pub staked_program: Program<'info, Token>,
 }
 
 #[account]
