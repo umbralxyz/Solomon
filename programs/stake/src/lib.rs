@@ -161,7 +161,7 @@ pub struct Reward<'info> {
 
 #[derive(Accounts)]
 pub struct Unstake<'info> {
-    #[account(mut)]
+    #[account(seeds = [b"vault-state"], bump)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub user_cooldown: Account<'info, UserCooldown>,
@@ -175,6 +175,7 @@ pub struct Unstake<'info> {
     pub user_token_account: Account<'info, TokenAccount>,
     #[account(mut)]
     pub vault_token_account: Account<'info, TokenAccount>,
+    /// CHECK: vault account to authorize unstaking
     #[account(seeds = [b"vault"], bump)]
     pub vault: AccountInfo<'info>,
     pub token_program: Program<'info, Token>,
