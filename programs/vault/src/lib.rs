@@ -5,6 +5,8 @@ declare_id!("A3p6U1p5jjZQbu346LrJb1asrTjkEPhDkfH4CXCYgpEd");
 
 #[program]
 pub mod vault {
+    use anchor_spl::token::Burn;
+
     use super::*;
 
     pub fn initialize_mint_state(
@@ -30,24 +32,20 @@ pub mod vault {
         Ok(())
     }
 
-    pub fn mint_token(ctx: Context<MintToken>, collat: u64) -> Result<()> {
+    pub fn mint_token(ctx: Context<MintToken>, amt: u64) -> Result<()> {
         let state = &ctx.accounts.mint_state;
-        // TODO: add decimals with rate
-        let rate = &state.exchange_rate;
-        let amt = collat*rate;
 
         if state.minted_per_block + amt > state.max_mint_per_block {
             return Err(ErrorCode::MaxMintExceeded.into())
         }
         
-        let approved_minters = &state.approved_minters;
         let authority = ctx.accounts.authority.key();
 
-        if !approved_minters.contains(&authority) {
-            return Err(ErrorCode::NotAnApprovedMinter.into());
+        if authority != state.admin {
+            return Err(ErrorCode::NotAdmin.into());
         }
 
-        // Create the MintTo struct for context
+        // mint tokens to recipient
         let cpi_accounts = MintTo {
             mint: ctx.accounts.mint.to_account_info(),
             to: ctx.accounts.recipient.to_account_info(),
@@ -56,7 +54,6 @@ pub mod vault {
         
         let cpi_program = ctx.accounts.token_program.to_account_info();
 
-        // Create the CpiContext for the request
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
 
         token::mint_to(cpi_ctx, amt)?; 
@@ -83,21 +80,22 @@ pub mod vault {
 
         token::transfer(cpi_ctx, collat)?;
 
-        // TODO: call mint after deposit
-        /*
-        let mint_ctx = Context::new(
-            MintToken {
-                mint: ctx.accounts.mint.clone(),
-                token_program: ctx.accounts.token_program.clone(),
-                recipient: ctx.accounts.caller_token.clone(),
-                authority: ctx.accounts.vault_authority.clone(),
-                mint_state: ctx.accounts.mint_state.clone(),
-            }
-        );
-
-        mint_token(mint_ctx, collat)?;
-        */
+        // mint tokens to caller
+        let cpi_accounts = MintTo {
+            mint: ctx.accounts.mint.to_account_info(),
+            to: ctx.accounts.caller_token.to_account_info(),
+            authority: ctx.accounts.vault_authority.to_account_info(),
+        };
         
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+
+        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+
+        let rate = state.exchange_rate;
+        let amt = collat * rate;
+
+        token::mint_to(cpi_ctx, amt)?; 
+
         Ok(())
     }
 
@@ -141,6 +139,22 @@ pub mod vault {
         let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
 
         token::transfer(cpi_ctx, collat)?;
+
+        // burn tokens that caller redeemed
+        let cpi_accounts = Burn {
+            mint: ctx.accounts.mint.to_account_info(),
+            from: ctx.accounts.mint_token_vault.to_account_info(),
+            authority: ctx.accounts.vault_authority.to_account_info(),
+        };
+        
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+
+        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+
+        let rate = state.exchange_rate;
+        let amt = collat * rate;
+
+        token::burn(cpi_ctx, amt)?;
         
         Ok(())
     }
@@ -349,6 +363,8 @@ pub struct Redeem<'info> {
     #[account(mut)]
     pub mint_state: Account<'info, MintState>,
     pub vault_authority: Signer<'info>,
+    #[account(mut)]
+    pub mint: Account<'info, Mint>,
 }
 
 #[derive(Accounts)]
