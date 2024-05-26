@@ -13,18 +13,16 @@ pub mod vault {
         ctx: Context<InitializeMintState>,
         max_mint_per_block: u64,
         max_redeem_per_block: u64,
-        exchange_rate: u64,
     ) -> Result<()> {
         let admin = ctx.accounts.admin.key();
         let mint_state = &mut ctx.accounts.mint_state;
         //let b = ctx.bumps.mint_state;
     
-        mint_state.supported_assets = vec![];
         mint_state.max_mint_per_block = max_mint_per_block;
         mint_state.max_redeem_per_block = max_redeem_per_block;
         mint_state.minted_per_block = 0;
         mint_state.redeemed_per_block = 0;
-        mint_state.exchange_rate = exchange_rate;
+        mint_state.exchange_rates = vec![];
         mint_state.approved_minters = vec![admin];
         mint_state.approved_redeemers = vec![admin];
         mint_state.admin = admin;
@@ -32,8 +30,20 @@ pub mod vault {
         Ok(())
     }
 
-    pub fn mint_token(ctx: Context<MintToken>, amt: u64) -> Result<()> {
+    pub fn add_asset(ctx: Context<Asset>, asset: Pubkey, exchange_rate: u64) -> Result<()> {
         let state = &ctx.accounts.mint_state;
+
+        if ctx.accounts.authority.key() != state.admin {
+            return Err(ErrorCode::NotAdmin.into());
+        }
+
+        // todo
+
+        Ok(())
+    }
+
+    pub fn mint_token(ctx: Context<MintToken>, amt: u64) -> Result<()> {
+        let state = &mut ctx.accounts.mint_state;
 
         if state.minted_per_block + amt > state.max_mint_per_block {
             return Err(ErrorCode::MaxMintExceeded.into())
@@ -57,14 +67,20 @@ pub mod vault {
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
 
         token::mint_to(cpi_ctx, amt)?; 
+
+        state.minted_per_block += amt;
         
         Ok(())
     }
 
     pub fn deposit(ctx: Context<Deposit>, collat: u64) -> Result<()> {
         let state = &ctx.accounts.mint_state;
+        let mut rate = 0;
+        let asset = ctx.accounts.collat_program.key();
 
-        if !state.supported_assets.contains(ctx.accounts.collat_program.key) {
+        if let Some(i) = state.exchange_rates.iter().position(|(pubkey, _)| *pubkey == asset) {
+            rate = state.exchange_rates[i].1;
+        } else {
             return Err(ErrorCode::AssetNotSupported.into());
         }
 
@@ -91,7 +107,6 @@ pub mod vault {
 
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
 
-        let rate = state.exchange_rate;
         let amt = collat * rate;
 
         token::mint_to(cpi_ctx, amt)?; 
@@ -100,9 +115,16 @@ pub mod vault {
     }
 
     pub fn redeem(ctx: Context<Redeem>, amt: u64) -> Result<()> {
-        let state = &ctx.accounts.mint_state;
-        // TODO: add decimals with rate
-        let rate = ctx.accounts.mint_state.exchange_rate;
+        let state = &mut ctx.accounts.mint_state;
+        let mut rate = 0;
+        let asset = ctx.accounts.collat_program.key();
+
+        if let Some(i) = state.exchange_rates.iter().position(|(pubkey, _)| *pubkey == asset) {
+            rate = state.exchange_rates[i].1;
+        } else {
+            return Err(ErrorCode::AssetNotSupported.into());
+        }
+
         let collat = amt / rate;
 
         if state.redeemed_per_block + amt > state.max_redeem_per_block {
@@ -151,10 +173,12 @@ pub mod vault {
 
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
 
-        let rate = state.exchange_rate;
+        let rate = state.exchange_rates[0].1; //TODO
         let amt = collat * rate;
 
         token::burn(cpi_ctx, amt)?;
+
+        state.redeemed_per_block += amt;
         
         Ok(())
     }
@@ -302,6 +326,14 @@ pub mod vault {
 }
 
 #[derive(Accounts)]
+pub struct Asset<'info> {
+    #[account(mut)]
+    pub mint_state: Account<'info, MintState>,
+    #[account(signer)]
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct MintToken<'info> {
     /// CHECK: the token to mint
     #[account(mut)]
@@ -431,12 +463,11 @@ pub struct SetMaxRedeemPerBlock<'info> {
 
 #[account]
 pub struct MintState {
-    pub supported_assets: Vec<Pubkey>,
     pub max_mint_per_block: u64,
     pub max_redeem_per_block: u64,
     pub minted_per_block: u64,
     pub redeemed_per_block: u64,
-    pub exchange_rate: u64, 
+    pub exchange_rates: Vec<(Pubkey, u64)>, 
     pub approved_minters: Vec<Pubkey>,
     pub approved_redeemers: Vec<Pubkey>,
     pub managers: Vec<Pubkey>,

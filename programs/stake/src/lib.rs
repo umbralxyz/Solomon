@@ -1,11 +1,34 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Transfer};
+use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 declare_id!("A3p6U1p5jjZQbu346LrJb1asrTjkEPhDkfH4CXCYgpEd");
 
 #[program]
 pub mod stake {
+    use anchor_spl::token::MintTo;
+
     use super::*;
+
+    pub fn mint_staked_token(ctx: Context<MintToken>, amt: u64) -> Result<()> {
+        let state = &ctx.accounts.vault_state;
+
+        // TODO: add checks for mint permissions
+
+        // mint tokens to recipient
+        let cpi_accounts = MintTo {
+            mint: ctx.accounts.mint.to_account_info(),
+            to: ctx.accounts.recipient.to_account_info(),
+            authority: ctx.accounts.authority.to_account_info(),
+        };
+        
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+
+        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+
+        token::mint_to(cpi_ctx, amt)?; 
+
+        Ok(())
+    }
 
     pub fn initialize(ctx: Context<Initialize>, max_cooldown: u64) -> Result<()> {
         let vault_state = &mut ctx.accounts.vault_state;
@@ -30,40 +53,77 @@ pub mod stake {
         Ok(())
     }
 
+    pub fn stake(ctx: Context<Stake>, amt: u64) -> Result<()> {
+        let state = &ctx.accounts.vault_state;
+        
+        // TODO: add staking permission checks
+
+        // Transfer user's unstaked tokens to vault
+        let transfer_instruction = Transfer {
+            from: ctx.accounts.user_token_account.to_account_info(),
+            to: ctx.accounts.vault_token_account.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        };
+
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
+
+        token::transfer(cpi_ctx, amt)?;
+
+        // mint tokens to depositer
+        let cpi_accounts = MintTo {
+            mint: ctx.accounts.mint.to_account_info(),
+            to: ctx.accounts.user_staked_account.to_account_info(),
+            authority: ctx.accounts.vault.to_account_info(),
+        };
+        
+        let cpi_program = ctx.accounts.staked_program.to_account_info();
+
+        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+
+        token::mint_to(cpi_ctx, amt)?; 
+
+        // TODO: handle user cooldown logic
+
+        Ok(())
+    }
+
     pub fn unstake(ctx: Context<Unstake>) -> Result<()> {
         let cooldown = &mut ctx.accounts.user_cooldown;
         let clock = Clock::get()?;
-        if clock.unix_timestamp as u64 >= cooldown.cooldown_end {
-            let assets = cooldown.underlying_amount;
+
+        if (clock.unix_timestamp as u64) < cooldown.cooldown_end {
+            return Err(StakeError::TooSoon.into());
+        }
+
+        let assets = cooldown.underlying_amount;
             cooldown.cooldown_end = 0;
             cooldown.underlying_amount = 0;
 
-            // Transfer staked tokens to vault
-            let transfer_instruction = Transfer {
-                from: ctx.accounts.user_staked_account.to_account_info(),
-                to: ctx.accounts.vault_staked_account.to_account_info(),
-                authority: ctx.accounts.user.to_account_info(),
-            };
+        // Transfer staked tokens to vault
+        let transfer_instruction = Transfer {
+            from: ctx.accounts.user_staked_account.to_account_info(),
+            to: ctx.accounts.vault_staked_account.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        };
 
-            let cpi_program = ctx.accounts.staked_program.to_account_info();
-            let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
+        let cpi_program = ctx.accounts.staked_program.to_account_info();
+        let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
 
-            token::transfer(cpi_ctx, assets)?;
+        token::transfer(cpi_ctx, assets)?;
 
-            // Transfer token to caller
-            let transfer_instruction = Transfer {
-                from: ctx.accounts.vault_token_account.to_account_info(),
-                to: ctx.accounts.user_token_account.to_account_info(),
-                authority: ctx.accounts.vault.to_account_info(),
-            };
+        // Transfer token to caller
+        let transfer_instruction = Transfer {
+            from: ctx.accounts.vault_token_account.to_account_info(),
+            to: ctx.accounts.user_token_account.to_account_info(),
+            authority: ctx.accounts.vault.to_account_info(),
+        };
 
-            let cpi_program = ctx.accounts.token_program.to_account_info();
-            let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
 
-            token::transfer(cpi_ctx, assets)?;
-        } else {
-            return Err(StakeError::TooSoon.into());
-        }
+        token::transfer(cpi_ctx, assets)?;
+
         Ok(())
     }
 
@@ -122,6 +182,22 @@ pub struct Initialize<'info> {
 }
 
 #[derive(Accounts)]
+pub struct MintToken<'info> {
+    /// CHECK: the token to mint
+    #[account(mut)]
+    pub mint: Account<'info, Mint>,
+    pub token_program: Program<'info, Token>,
+    /// CHECK: the token account to mint tokens to
+    #[account(mut)]
+    pub recipient: Account<'info, TokenAccount>,
+    /// CHECK: the authority of the mint account
+    #[account(signer)]
+    pub authority: Signer<'info>,
+    #[account(mut)]
+    pub vault_state: Account<'info, VaultState>,
+}
+
+#[derive(Accounts)]
 pub struct SetCooldownDuration<'info> {
     #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
@@ -161,6 +237,31 @@ pub struct Reward<'info> {
     #[account(signer)]
     pub caller: Signer<'info>,
     // TODO
+}
+
+#[derive(Accounts)]
+pub struct Stake<'info> {
+    #[account(seeds = [b"vault-state"], bump)]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub user_cooldown: Account<'info, UserCooldown>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    #[account(mut)]
+    pub vault: Signer<'info>,
+    #[account(mut)]
+    pub user_staked_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub vault_staked_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub user_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub vault_token_account: Account<'info, TokenAccount>,
+    /// CHECK: the token to mint
+    #[account(mut)]
+    pub mint: Account<'info, Mint>,
+    pub token_program: Program<'info, Token>,
+    pub staked_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
