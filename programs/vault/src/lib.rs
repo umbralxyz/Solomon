@@ -1,4 +1,3 @@
-
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer, MintTo, Mint};
 declare_id!("A3p6U1p5jjZQbu346LrJb1asrTjkEPhDkfH4CXCYgpEd");
@@ -30,14 +29,20 @@ pub mod vault {
         Ok(())
     }
 
-    pub fn add_asset(ctx: Context<Asset>, asset: Pubkey, exchange_rate: u64) -> Result<()> {
-        let state = &ctx.accounts.mint_state;
-
-        if ctx.accounts.authority.key() != state.admin {
-            return Err(ErrorCode::NotAdmin.into());
+    // The deposit rate is (stable units / asset units) [how many stable coins a depositer will get per asset coin]
+    // The redeem rate is (asset units / stable units) [how many asset coins a depositer will get per stable coin]
+    pub fn add_asset(ctx: Context<Asset>, asset: Pubkey, deposit_rate: u64, redeem_rate: u64) -> Result<()> {
+        if ctx.accounts.authority.key() != ctx.accounts.mint_state.admin {
+            return Err(MintError::NotAdmin.into());
         }
 
-        // todo
+        let state = &mut ctx.accounts.mint_state;
+
+        if state.exchange_rates.iter().any(|(pubkey, _, _)| *pubkey == asset) {
+            return Err(MintError::AssetAlreadySupported.into());
+        }
+        
+        state.exchange_rates.push((asset, deposit_rate, redeem_rate));
 
         Ok(())
     }
@@ -46,13 +51,13 @@ pub mod vault {
         let state = &mut ctx.accounts.mint_state;
 
         if state.minted_per_block + amt > state.max_mint_per_block {
-            return Err(ErrorCode::MaxMintExceeded.into())
+            return Err(MintError::MaxMintExceeded.into())
         }
         
         let authority = ctx.accounts.authority.key();
 
         if authority != state.admin {
-            return Err(ErrorCode::NotAdmin.into());
+            return Err(MintError::NotAdmin.into());
         }
 
         // mint tokens to recipient
@@ -78,10 +83,10 @@ pub mod vault {
         let mut rate = 0;
         let asset = ctx.accounts.collat_program.key();
 
-        if let Some(i) = state.exchange_rates.iter().position(|(pubkey, _)| *pubkey == asset) {
+        if let Some(i) = state.exchange_rates.iter().position(|(pubkey, _, _)| *pubkey == asset) {
             rate = state.exchange_rates[i].1;
         } else {
-            return Err(ErrorCode::AssetNotSupported.into());
+            return Err(MintError::AssetNotSupported.into());
         }
 
         // Transfer collat to mint vault
@@ -115,27 +120,28 @@ pub mod vault {
     }
 
     pub fn redeem(ctx: Context<Redeem>, amt: u64) -> Result<()> {
+        let caller = &ctx.accounts.redeemer.key();
         let state = &mut ctx.accounts.mint_state;
         let mut rate = 0;
         let asset = ctx.accounts.collat_program.key();
 
-        if let Some(i) = state.exchange_rates.iter().position(|(pubkey, _)| *pubkey == asset) {
-            rate = state.exchange_rates[i].1;
+        if let Some(i) = state.exchange_rates.iter().position(|(pubkey, _, _)| *pubkey == asset) {
+            rate = state.exchange_rates[i].2;
         } else {
-            return Err(ErrorCode::AssetNotSupported.into());
+            return Err(MintError::AssetNotSupported.into());
         }
 
-        let collat = amt / rate;
+        let collat = amt * rate;
 
         if state.redeemed_per_block + amt > state.max_redeem_per_block {
-            return Err(ErrorCode::MaxRedeemExceeded.into())
+            return Err(MintError::MaxRedeemExceeded.into())
         }
 
         let approved_redeemers = &state.approved_redeemers;
         let authority = ctx.accounts.redeemer.key();
 
         if !approved_redeemers.contains(&authority) {
-            return Err(ErrorCode::NotAnApprovedRedeemer.into());
+            return Err(MintError::NotAnApprovedRedeemer.into());
         }
 
         // Transfer "mint token" to mint vault
@@ -179,13 +185,19 @@ pub mod vault {
         token::burn(cpi_ctx, amt)?;
 
         state.redeemed_per_block += amt;
+
+        emit!(RedeemEvent {
+            who: *caller,
+            amt: amt,
+        });
         
         Ok(())
     }
 
     pub fn withdraw(ctx: Context<Withdraw>, amt: u64) -> Result<()> {
-        if !ctx.accounts.mint_state.managers.contains(&ctx.accounts.caller.key()) {
-            return Err(ErrorCode::NotManager.into());
+        let caller = &ctx.accounts.caller.key();
+        if !ctx.accounts.mint_state.managers.contains(caller) {
+            return Err(MintError::NotManager.into());
         }
 
         // Transfer collateral 
@@ -199,29 +211,34 @@ pub mod vault {
         let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
 
         token::transfer(cpi_ctx, amt)?;
+
+        emit!(WithdrawEvent {
+            who: *caller,
+            amt: amt,
+        });
  
         Ok(())
     }
 
     pub fn whitelist_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
-            return Err(ErrorCode::NotAdmin.into());
+            return Err(MintError::NotAdmin.into());
         }
 
         let approved_minters = &mut ctx.accounts.mint_state.approved_minters;
 
-        if !approved_minters.contains(&minter.clone()) {
-            approved_minters.push(minter);
-        } else {
-            return Err(ErrorCode::AlreadyMinter.into());
-        }
+        if approved_minters.contains(&minter.clone()) {
+            return Err(MintError::AlreadyMinter.into());
+        } 
+
+        approved_minters.push(minter);
 
         Ok(())
     }
 
     pub fn remove_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
-            return Err(ErrorCode::NotAdmin.into());
+            return Err(MintError::NotAdmin.into());
         }
 
         let approved_minters = &mut ctx.accounts.mint_state.approved_minters;
@@ -229,7 +246,7 @@ pub mod vault {
         if let Some(i) = approved_minters.iter().position(|&x| x == minter) {
             approved_minters.swap_remove(i);
         } else {
-            return Err(ErrorCode::MinterNotWhitelisted.into())
+            return Err(MintError::MinterNotWhitelisted.into())
         }
         
         Ok(())
@@ -237,23 +254,23 @@ pub mod vault {
 
     pub fn whitelist_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
-            return Err(ErrorCode::NotAdmin.into());
+            return Err(MintError::NotAdmin.into());
         }
 
         let approved_redeemers = &mut ctx.accounts.mint_state.approved_redeemers;
 
-        if !approved_redeemers.contains(&redeemer.clone()) {
-            approved_redeemers.push(redeemer);
-        } else {
-            return Err(ErrorCode::AlreadyRedeemer.into());
-        }
+        if approved_redeemers.contains(&redeemer.clone()) {
+            return Err(MintError::AlreadyRedeemer.into());
+        } 
+
+        approved_redeemers.push(redeemer);
 
         Ok(())
     }
 
     pub fn remove_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
-            return Err(ErrorCode::NotAdmin.into());
+            return Err(MintError::NotAdmin.into());
         }
 
         let approved_redeemers = &mut ctx.accounts.mint_state.approved_redeemers;
@@ -261,15 +278,17 @@ pub mod vault {
         if let Some(i) = approved_redeemers.iter().position(|&x| x == redeemer) {
             approved_redeemers.swap_remove(i);
         } else {
-            return Err(ErrorCode::RedeemerNotWhitelisted.into())
+            return Err(MintError::RedeemerNotWhitelisted.into())
         }
         
         Ok(())
     }
 
     pub fn add_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
-            return Err(ErrorCode::NotAdmin.into());
+        let caller = ctx.accounts.caller.key();
+
+        if caller != ctx.accounts.mint_state.admin {
+            return Err(MintError::NotAdmin.into());
         }
 
         let managers = &mut ctx.accounts.mint_state.managers;
@@ -277,15 +296,20 @@ pub mod vault {
         if !managers.contains(&manager) {
             managers.push(manager);
         } else {
-            return Err(ErrorCode::AlreadyManager.into());
+            return Err(MintError::AlreadyManager.into());
         }
+
+        emit!(NewManagerEvent {
+            new_manager: manager,
+            added_by: caller,
+        });
 
         Ok(())
     }
 
     pub fn remove_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
-            return Err(ErrorCode::NotAdmin.into());
+            return Err(MintError::NotAdmin.into());
         }
 
         let managers = &mut ctx.accounts.mint_state.managers;
@@ -293,7 +317,7 @@ pub mod vault {
         if let Some(i) = managers.iter().position(|&x| x == manager) {
             managers.swap_remove(i);
         } else {
-            return Err(ErrorCode::NotManagerYet.into());
+            return Err(MintError::NotManagerYet.into());
         }
 
         Ok(())
@@ -301,7 +325,7 @@ pub mod vault {
 
     pub fn transfer_admin(ctx: Context<TransferAdmin>, new_admin: Pubkey) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
-            return Err(ErrorCode::NotAdmin.into());
+            return Err(MintError::NotAdmin.into());
         }
 
         let mint_state = &mut ctx.accounts.mint_state;
@@ -467,7 +491,7 @@ pub struct MintState {
     pub max_redeem_per_block: u64,
     pub minted_per_block: u64,
     pub redeemed_per_block: u64,
-    pub exchange_rates: Vec<(Pubkey, u64)>, 
+    pub exchange_rates: Vec<(Pubkey, u64, u64)>, 
     pub approved_minters: Vec<Pubkey>,
     pub approved_redeemers: Vec<Pubkey>,
     pub managers: Vec<Pubkey>,
@@ -491,9 +515,40 @@ struct TokenMetadata {
 }
 
 
+#[event]
+pub struct TransferEvent {
+    from: Pubkey,
+    to: Pubkey,
+    amt: u64,
+}
+
+#[event]
+pub struct DepositEvent {
+    who: Pubkey,
+    amt: u64,
+}
+
+#[event]
+pub struct WithdrawEvent {
+    who: Pubkey,
+    amt: u64,
+}
+
+#[event]
+pub struct RedeemEvent {
+    who: Pubkey,
+    amt: u64,
+}
+
+#[event]
+pub struct NewManagerEvent {
+    new_manager: Pubkey,
+    added_by: Pubkey,
+}
+
 
 #[error_code]
-pub enum ErrorCode {
+pub enum MintError {
     #[msg("The provided account is not an approved minter")]
     NotAnApprovedMinter,
     #[msg("The provided account is not an approved redeemer")]
@@ -520,4 +575,6 @@ pub enum ErrorCode {
     MaxRedeemExceeded,
     #[msg("Asset not supported by mint vault")]
     AssetNotSupported,
+    #[msg("Asset already supported by mint vault")]
+    AssetAlreadySupported,
 }

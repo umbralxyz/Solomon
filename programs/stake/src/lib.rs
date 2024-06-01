@@ -12,7 +12,9 @@ pub mod stake {
     pub fn mint_staked_token(ctx: Context<MintToken>, amt: u64) -> Result<()> {
         let state = &ctx.accounts.vault_state;
 
-        // TODO: add checks for mint permissions
+        if ctx.accounts.authority.key() != state.admin {
+            return Err(StakeError::NotAdmin.into());
+        }
 
         // mint tokens to recipient
         let cpi_accounts = MintTo {
@@ -39,9 +41,14 @@ pub mod stake {
     }
 
     pub fn set_cooldown_duration(ctx: Context<SetCooldownDuration>, duration: u64) -> Result<()> {
-        let vault_state = &mut ctx.accounts.vault_state;
-        require!(duration <= vault_state.max_cooldown, StakeError::TooSoon);
-        vault_state.cooldown = duration;
+        let state = &mut ctx.accounts.vault_state;
+
+        if ctx.accounts.caller.key() != state.admin {
+            return Err(StakeError::NotAdmin.into());
+        }
+
+        require!(duration <= state.max_cooldown, StakeError::TooSoon);
+        state.cooldown = duration;
         Ok(())
     }
 
@@ -56,7 +63,9 @@ pub mod stake {
     pub fn stake(ctx: Context<Stake>, amt: u64) -> Result<()> {
         let state = &ctx.accounts.vault_state;
         
-        // TODO: add staking permission checks
+        if state.blacklist.contains(&ctx.accounts.user.key()) {
+            return Err(StakeError::Blacklisted.into());
+        }
 
         // Transfer user's unstaked tokens to vault
         let transfer_instruction = Transfer {
@@ -84,6 +93,11 @@ pub mod stake {
         token::mint_to(cpi_ctx, amt)?; 
 
         // TODO: handle user cooldown logic
+
+        emit!(StakeEvent {
+            who: ctx.accounts.user.key(),
+            amt: amt,
+        });
 
         Ok(())
     }
@@ -123,6 +137,11 @@ pub mod stake {
         let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
 
         token::transfer(cpi_ctx, assets)?;
+
+        emit!(UnstakeEvent {
+            who: ctx.accounts.user.key(),
+            amt: assets,
+        });
 
         Ok(())
     }
@@ -298,12 +317,25 @@ pub struct VaultState {
     pub rewarders: Vec<Pubkey>,
     pub admin: Pubkey,
     pub token: Pubkey,
+    pub blacklist: Vec<Pubkey>,
 }
 
 #[account]
 pub struct UserCooldown {
     pub cooldown_end: u64,
     pub underlying_amount: u64,
+}
+
+#[event]
+pub struct StakeEvent {
+    who: Pubkey,
+    amt: u64,
+}
+
+#[event]
+pub struct UnstakeEvent {
+    who: Pubkey,
+    amt: u64,
 }
 
 #[error_code]
@@ -318,4 +350,6 @@ pub enum StakeError {
     NotAdmin,
     #[msg("The caller is not a rewarder")]
     NotRewarder,
+    #[msg("The user is prohibited from staking")]
+    Blacklisted,
 }
