@@ -89,19 +89,33 @@ pub mod vault {
             return Err(MintError::AssetNotSupported.into());
         }
 
+        let amt = collat * rate;
+
+        if state.redeemed_per_block + amt > state.max_redeem_per_block {
+            return Err(MintError::MaxRedeemExceeded.into())
+        }
+
+        let approved_minters = &state.approved_minters;
+        let authority = ctx.accounts.depositer.key();
+
+        if !approved_minters.contains(&authority) {
+            return Err(MintError::NotAnApprovedMinter.into());
+        }
+
         // Transfer collat to mint vault
         let transfer_instruction = Transfer{
             from: ctx.accounts.caller_collat.to_account_info(),
             to: ctx.accounts.mint_collat_vault.to_account_info(),
-            authority: ctx.accounts.redeemer.to_account_info(),
+            authority: ctx.accounts.depositer.to_account_info(),
         };
          
-        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_program = ctx.accounts.collat_program.to_account_info();
         let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
 
         token::transfer(cpi_ctx, collat)?;
 
         // mint tokens to caller
+        
         let cpi_accounts = MintTo {
             mint: ctx.accounts.mint.to_account_info(),
             to: ctx.accounts.caller_token.to_account_info(),
@@ -111,8 +125,6 @@ pub mod vault {
         let cpi_program = ctx.accounts.token_program.to_account_info();
 
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-
-        let amt = collat * rate;
 
         token::mint_to(cpi_ctx, amt)?; 
 
@@ -202,7 +214,7 @@ pub mod vault {
 
         // Transfer collateral 
         let transfer_instruction = Transfer{
-            from: ctx.accounts.mint_vault.to_account_info(),
+            from: ctx.accounts.mint_collat_vault.to_account_info(),
             to: ctx.accounts.caller.to_account_info(),
             authority: ctx.accounts.vault_authority.to_account_info(),
         };
@@ -389,7 +401,7 @@ pub struct Deposit<'info> {
     /// CHECK: the redeemer's "mint token" account
     #[account(mut)]
     pub caller_token: Account<'info, TokenAccount>,
-    pub redeemer: Signer<'info>,
+    pub depositer: Signer<'info>,
     #[account(mut)]
     pub mint_state: Account<'info, MintState>,
     #[account(signer)]
@@ -428,7 +440,7 @@ pub struct Withdraw<'info> {
     pub token_program: Program<'info, Token>,
     /// CHECK: the token account to withdraw from
     #[account(mut)]
-    pub mint_vault: Account<'info, TokenAccount>,
+    pub mint_collat_vault: Account<'info, TokenAccount>,
     #[account(mut)]
     pub caller: Account<'info, TokenAccount>,
     /// CHECK: an individual allowed to withdraw
