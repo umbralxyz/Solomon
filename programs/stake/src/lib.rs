@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("A3p6U1p5jjZQbu346LrJb1asrTjkEPhDkfH4CXCYgpEd");
+declare_id!("36axVA5TApdCi8u7LV1ReekkEDJNGKMK2sL8akfi5e4Z");
 
 #[program]
 pub mod stake {
@@ -32,7 +32,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn initialize(ctx: Context<Initialize>, max_cooldown: u64, token: Pubkey) -> Result<()> {
+    pub fn initialize_vault_state(ctx: Context<InitializeVaultState>, max_cooldown: u64, token: Pubkey) -> Result<()> {
         let vault_state = &mut ctx.accounts.vault_state;
 
         // TODO: min shares donation attack protection
@@ -62,6 +62,10 @@ pub mod stake {
     pub fn stake(ctx: Context<Stake>, amt: u64) -> Result<()> {
         let state = &mut ctx.accounts.vault_state;
         
+        if state.token != ctx.accounts.token_program.key() {
+            return Err(StakeError::WrongToken.into());
+        }
+
         if state.blacklist.contains(&ctx.accounts.user.key()) {
             return Err(StakeError::Blacklisted.into());
         }
@@ -254,8 +258,8 @@ pub mod stake {
 }
 
 #[derive(Accounts)]
-pub struct Initialize<'info> {
-    #[account(init_if_needed, payer = admin, space = 168)] // space might need to be much larger for user data?
+pub struct InitializeVaultState<'info> {
+    #[account(init_if_needed, payer = admin, space = 1024, seeds = [b"vault-state"], bump)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub admin: Signer<'info>,
@@ -304,7 +308,7 @@ pub struct Reward<'info> {
 
 #[derive(Accounts)]
 pub struct Stake<'info> {
-    #[account(seeds = [b"vault-state"], bump)]
+    #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub user: Signer<'info>,
@@ -327,7 +331,7 @@ pub struct Stake<'info> {
 
 #[derive(Accounts)]
 pub struct Unstake<'info> {
-    #[account(seeds = [b"vault-state"], bump)]
+    #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub user: Signer<'info>,
@@ -397,4 +401,6 @@ pub enum StakeError {
     Blacklisted,
     #[msg("The user was not found in current stakers")]
     UserNotFound,
+    #[msg("That token is not available for staking")]
+    WrongToken,
 }
