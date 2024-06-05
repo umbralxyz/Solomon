@@ -5,7 +5,7 @@ declare_id!("A3p6U1p5jjZQbu346LrJb1asrTjkEPhDkfH4CXCYgpEd");
 
 #[program]
 pub mod stake {
-    use anchor_spl::token::MintTo;
+    use anchor_spl::token::{Burn, MintTo};
 
     use super::*;
 
@@ -32,11 +32,17 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn initialize(ctx: Context<Initialize>, max_cooldown: u64) -> Result<()> {
+    pub fn initialize(ctx: Context<Initialize>, max_cooldown: u64, token: Pubkey) -> Result<()> {
         let vault_state = &mut ctx.accounts.vault_state;
+
+        // TODO: min shares donation attack protection
         vault_state.max_cooldown = max_cooldown;
         vault_state.cooldown = max_cooldown;
+        vault_state.token = token;
         vault_state.admin = ctx.accounts.admin.key();
+        vault_state.rewarders = vec![ctx.accounts.admin.key()];
+        vault_state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
+
         Ok(())
     }
 
@@ -49,19 +55,12 @@ pub mod stake {
 
         require!(duration <= state.max_cooldown, StakeError::TooSoon);
         state.cooldown = duration;
-        Ok(())
-    }
 
-    pub fn cooldown_assets(ctx: Context<Cooldown>, assets: u64) -> Result<()> {
-        let cooldown = &mut ctx.accounts.user_cooldown;
-        let clock = Clock::get()?;
-        cooldown.cooldown_end = clock.unix_timestamp as u64 + ctx.accounts.vault_state.cooldown;
-        cooldown.underlying_amount += assets;
         Ok(())
     }
 
     pub fn stake(ctx: Context<Stake>, amt: u64) -> Result<()> {
-        let state = &ctx.accounts.vault_state;
+        let state = &mut ctx.accounts.vault_state;
         
         if state.blacklist.contains(&ctx.accounts.user.key()) {
             return Err(StakeError::Blacklisted.into());
@@ -92,7 +91,21 @@ pub mod stake {
 
         token::mint_to(cpi_ctx, amt)?; 
 
-        // TODO: handle user cooldown logic
+        // Update user data or add new user data
+        let new_cd_end = Clock::get()?.unix_timestamp as u64 + state.cooldown;
+        
+        if let Some(i) = state.user_data.iter().position(|x| x.user == ctx.accounts.user.key()) {
+            state.user_data[i].cooldown_end = new_cd_end;
+            state.user_data[i].pending_deposits.push(amt);
+        } else {
+            state.user_data.push(UserData {
+                user: ctx.accounts.user.key(),
+                pending_deposits: vec![amt],
+                deposits: 0,
+                yields: 0,
+                cooldown_end: new_cd_end,
+            })
+        }
 
         emit!(StakeEvent {
             who: ctx.accounts.user.key(),
@@ -103,16 +116,23 @@ pub mod stake {
     }
 
     pub fn unstake(ctx: Context<Unstake>) -> Result<()> {
-        let cooldown = &mut ctx.accounts.user_cooldown;
+        let state = &mut ctx.accounts.vault_state;
+        let user_data: &mut UserData;
+        
+        if let Some(i) = state.user_data.iter().position(|x| x.user == ctx.accounts.user.key()) {
+            user_data = &mut state.user_data[i];
+        } else {
+            return Err(StakeError::UserNotFound.into())
+        }
+
         let clock = Clock::get()?;
 
-        if (clock.unix_timestamp as u64) < cooldown.cooldown_end {
+        if (clock.unix_timestamp as u64) < user_data.cooldown_end {
             return Err(StakeError::TooSoon.into());
         }
 
-        let assets = cooldown.underlying_amount;
-            cooldown.cooldown_end = 0;
-            cooldown.underlying_amount = 0;
+        let to_vault = user_data.deposits;
+        let to_user = user_data.deposits + user_data.yields;
 
         // Transfer staked tokens to vault
         let transfer_instruction = Transfer {
@@ -124,7 +144,7 @@ pub mod stake {
         let cpi_program = ctx.accounts.staked_program.to_account_info();
         let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
 
-        token::transfer(cpi_ctx, assets)?;
+        token::transfer(cpi_ctx, to_vault)?;
 
         // Transfer token to caller
         let transfer_instruction = Transfer {
@@ -136,11 +156,32 @@ pub mod stake {
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
 
-        token::transfer(cpi_ctx, assets)?;
+        token::transfer(cpi_ctx, to_user)?;
+
+        // Burn staked tokens that caller redeemed
+        let cpi_accounts = Burn {
+            mint: ctx.accounts.staked_program.to_account_info(),
+            from: ctx.accounts.vault_staked_account.to_account_info(),
+            authority: ctx.accounts.vault.to_account_info(),
+        };
+        
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+
+        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+
+        token::burn(cpi_ctx, to_vault)?;
+
+        {
+            user_data.cooldown_end = 0;
+            user_data.deposits = 0;
+            user_data.yields = 0;
+        }
+
+        state.total_deposits -= to_vault;
 
         emit!(UnstakeEvent {
             who: ctx.accounts.user.key(),
-            amt: assets,
+            amt: to_vault,
         });
 
         Ok(())
@@ -178,12 +219,33 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn reward(ctx: Context<Reward>) -> Result<()> {
-        if !ctx.accounts.vault_state.rewarders.contains(&ctx.accounts.caller.key()) {
+    pub fn reward(ctx: Context<Reward>, amt: u64) -> Result<()> {
+        // amt = total yield to distribute
+        
+        let state = &mut ctx.accounts.vault_state;
+
+        let total_deposits = state.total_deposits;
+        let mut new_deposits = 0;
+
+        if state.rewarders.contains(&ctx.accounts.caller.key()) {
             return Err(StakeError::NotRewarder.into());
         }
 
-        // TODO
+        let user_data = &mut state.user_data;
+
+        // Update each user's data
+        for user in user_data {
+            let yield_portion = (user.deposits / total_deposits) * amt; // TODO: should it be (user.yields + user.deposits) ?
+            user.yields += yield_portion;
+
+            for deposit in user.pending_deposits.drain(..) {
+                user.deposits += deposit;
+                new_deposits += deposit;
+            }
+        }
+
+        state.total_deposits += new_deposits;
+        state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
 
         ctx.accounts.vault_state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
 
@@ -193,7 +255,7 @@ pub mod stake {
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
-    #[account(init_if_needed, payer = admin, space = 168)]
+    #[account(init_if_needed, payer = admin, space = 168)] // space might need to be much larger for user data?
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub admin: Signer<'info>,
@@ -225,23 +287,6 @@ pub struct SetCooldownDuration<'info> {
 }
 
 #[derive(Accounts)]
-pub struct Cooldown<'info> {
-    #[account(mut)]
-    pub vault_state: Account<'info, VaultState>,
-    #[account(
-        init_if_needed,
-        payer = user,
-        space = 24,
-        seeds = [b"user_cooldown", user.key().as_ref()],
-        bump
-    )]
-    pub user_cooldown: Account<'info, UserCooldown>,
-    #[account(mut)]
-    pub user: Signer<'info>,
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
 pub struct Rewarders<'info> {
     #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
@@ -255,15 +300,12 @@ pub struct Reward<'info> {
     pub vault_state: Account<'info, VaultState>,
     #[account(signer)]
     pub caller: Signer<'info>,
-    // TODO
 }
 
 #[derive(Accounts)]
 pub struct Stake<'info> {
     #[account(seeds = [b"vault-state"], bump)]
     pub vault_state: Account<'info, VaultState>,
-    #[account(mut)]
-    pub user_cooldown: Account<'info, UserCooldown>,
     #[account(mut)]
     pub user: Signer<'info>,
     #[account(mut)]
@@ -288,8 +330,6 @@ pub struct Unstake<'info> {
     #[account(seeds = [b"vault-state"], bump)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
-    pub user_cooldown: Account<'info, UserCooldown>,
-    #[account(mut)]
     pub user: Signer<'info>,
     #[account(mut)]
     pub vault: Signer<'info>,
@@ -310,20 +350,23 @@ pub struct VaultState {
     pub cooldown: u64,
     pub max_cooldown: u64,
     pub min_shares: u64,
-    pub vesting_period: u64,
-    pub vesting_amount: u64,
+    pub total_deposits: u64,
     pub last_distribution_time: u64,
     pub vault_bump: u8,
     pub rewarders: Vec<Pubkey>,
     pub admin: Pubkey,
     pub token: Pubkey,
     pub blacklist: Vec<Pubkey>,
+    pub user_data: Vec<UserData>, 
 }
 
 #[account]
-pub struct UserCooldown {
+pub struct UserData {
+    pub user: Pubkey,
+    pub pending_deposits: Vec<u64>, // to be added to deposits at next reward
+    pub deposits: u64,
+    pub yields: u64, 
     pub cooldown_end: u64,
-    pub underlying_amount: u64,
 }
 
 #[event]
@@ -352,4 +395,6 @@ pub enum StakeError {
     NotRewarder,
     #[msg("The user is prohibited from staking")]
     Blacklisted,
+    #[msg("The user was not found in current stakers")]
+    UserNotFound,
 }

@@ -191,9 +191,6 @@ pub mod vault {
 
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
 
-        let rate = state.exchange_rates[0].1; //TODO
-        let amt = collat * rate;
-
         token::burn(cpi_ctx, amt)?;
 
         state.redeemed_per_block += amt;
