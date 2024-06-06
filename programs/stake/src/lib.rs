@@ -46,6 +46,17 @@ pub mod stake {
         Ok(())
     }
 
+    pub fn initialize_user_account(ctx: Context<InitializeUserAccount>) -> Result<()> {
+        let user_data = &mut ctx.accounts.user_data;
+
+        user_data.user = ctx.accounts.user.key();
+        user_data.deposits = 0;
+        user_data.reward_tally = 0;
+        user_data.cooldowns = Vec::new();
+
+        Ok(())
+    }
+
     pub fn set_cooldown_duration(ctx: Context<SetCooldownDuration>, duration: u64) -> Result<()> {
         let state = &mut ctx.accounts.vault_state;
 
@@ -61,7 +72,8 @@ pub mod stake {
 
     pub fn stake(ctx: Context<Stake>, amt: u64) -> Result<()> {
         let state = &mut ctx.accounts.vault_state;
-        
+        let user_data = &mut ctx.accounts.user_data;
+
         if state.token != ctx.accounts.token_program.key() {
             return Err(StakeError::WrongToken.into());
         }
@@ -82,34 +94,25 @@ pub mod stake {
 
         token::transfer(cpi_ctx, amt)?;
 
-        // mint tokens to depositer
+        // Mint tokens to depositer
         let cpi_accounts = MintTo {
             mint: ctx.accounts.mint.to_account_info(),
             to: ctx.accounts.user_staked_account.to_account_info(),
             authority: ctx.accounts.vault.to_account_info(),
         };
-        
+
         let cpi_program = ctx.accounts.staked_program.to_account_info();
 
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
 
-        token::mint_to(cpi_ctx, amt)?; 
+        token::mint_to(cpi_ctx, amt)?;
 
-        // Update user data or add new user data
+        // Update user data and vault
         let new_cd_end = Clock::get()?.unix_timestamp as u64 + state.cooldown;
-        
-        if let Some(i) = state.user_data.iter().position(|x| x.user == ctx.accounts.user.key()) {
-            state.user_data[i].cooldown_end = new_cd_end;
-            state.user_data[i].pending_deposits.push(amt);
-        } else {
-            state.user_data.push(UserData {
-                user: ctx.accounts.user.key(),
-                pending_deposits: vec![amt],
-                deposits: 0,
-                yields: 0,
-                cooldown_end: new_cd_end,
-            })
-        }
+        user_data.cooldowns.push((new_cd_end, amt));
+        user_data.deposits += amt;
+        user_data.reward_tally += state.reward_per_deposit + amt;
+        state.total_deposits += amt;
 
         emit!(StakeEvent {
             who: ctx.accounts.user.key(),
@@ -120,23 +123,23 @@ pub mod stake {
     }
 
     pub fn unstake(ctx: Context<Unstake>) -> Result<()> {
+        // Withdraws the assets that have cooled down and all yield generated
         let state = &mut ctx.accounts.vault_state;
-        let user_data: &mut UserData;
+
+        let clock = Clock::get()?.unix_timestamp as u64;
+
+        let mut deposits = ctx.accounts.user_data.deposits; // TODO: consider renaming this
         
-        if let Some(i) = state.user_data.iter().position(|x| x.user == ctx.accounts.user.key()) {
-            user_data = &mut state.user_data[i];
-        } else {
-            return Err(StakeError::UserNotFound.into())
+        for (cd, hold) in &ctx.accounts.user_data.cooldowns {
+            if cd >= &clock {
+                deposits -= hold; // don't unstake assets that have not cooled down
+            }
         }
 
-        let clock = Clock::get()?;
+        let user_data = &mut ctx.accounts.user_data;
 
-        if (clock.unix_timestamp as u64) < user_data.cooldown_end {
-            return Err(StakeError::TooSoon.into());
-        }
-
-        let to_vault = user_data.deposits;
-        let to_user = user_data.deposits + user_data.yields;
+        // Calculate user yields 
+        let yields = user_data.deposits * state.reward_per_deposit - user_data.reward_tally;
 
         // Transfer staked tokens to vault
         let transfer_instruction = Transfer {
@@ -148,7 +151,7 @@ pub mod stake {
         let cpi_program = ctx.accounts.staked_program.to_account_info();
         let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
 
-        token::transfer(cpi_ctx, to_vault)?;
+        token::transfer(cpi_ctx, deposits)?;
 
         // Transfer token to caller
         let transfer_instruction = Transfer {
@@ -160,7 +163,7 @@ pub mod stake {
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
 
-        token::transfer(cpi_ctx, to_user)?;
+        token::transfer(cpi_ctx, deposits + yields)?;
 
         // Burn staked tokens that caller redeemed
         let cpi_accounts = Burn {
@@ -173,19 +176,20 @@ pub mod stake {
 
         let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
 
-        token::burn(cpi_ctx, to_vault)?;
+        token::burn(cpi_ctx, deposits)?;
 
-        {
-            user_data.cooldown_end = 0;
-            user_data.deposits = 0;
-            user_data.yields = 0;
-        }
+        // Clear deposits that were unstaked and update user reward tally and deposits
+        user_data.cooldowns.retain(|&(cd, _)| cd >= clock);
+        user_data.reward_tally = user_data.deposits * state.reward_per_deposit; // TODO: double check this line and below
+        user_data.reward_tally -= state.reward_per_deposit * deposits;
+        user_data.deposits -= deposits;
 
-        state.total_deposits -= to_vault;
+        // Update vault state
+        state.total_deposits -= deposits;
 
         emit!(UnstakeEvent {
             who: ctx.accounts.user.key(),
-            amt: to_vault,
+            amt: deposits,
         });
 
         Ok(())
@@ -228,27 +232,12 @@ pub mod stake {
         
         let state = &mut ctx.accounts.vault_state;
 
-        let total_deposits = state.total_deposits;
-        let mut new_deposits = 0;
-
         if state.rewarders.contains(&ctx.accounts.caller.key()) {
             return Err(StakeError::NotRewarder.into());
         }
 
-        let user_data = &mut state.user_data;
+        state.reward_per_deposit = (state.reward_per_deposit + amt) / state.total_deposits;
 
-        // Update each user's data
-        for user in user_data {
-            let yield_portion = (user.deposits / total_deposits) * amt; // TODO: should it be (user.yields + user.deposits) ?
-            user.yields += yield_portion;
-
-            for deposit in user.pending_deposits.drain(..) {
-                user.deposits += deposit;
-                new_deposits += deposit;
-            }
-        }
-
-        state.total_deposits += new_deposits;
         state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
 
         ctx.accounts.vault_state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
@@ -265,6 +254,17 @@ pub struct InitializeVaultState<'info> {
     pub admin: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
+
+#[derive(Accounts)]
+#[instruction(bump: u8)]
+pub struct InitializeUserAccount<'info> {
+    #[account(init, payer = user, space = 8 + 32 + 8 + 8 + 8 + 8 + (8 * 10), seeds = [b"user_data", user.key().as_ref()], bump)]
+    pub user_data: Account<'info, UserPDA>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 
 #[derive(Accounts)]
 pub struct MintToken<'info> {
@@ -311,6 +311,8 @@ pub struct Stake<'info> {
     #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
+    pub user_data: Account<'info, UserPDA>,
+    #[account(mut)]
     pub user: Signer<'info>,
     #[account(mut)]
     pub vault: Signer<'info>,
@@ -334,6 +336,8 @@ pub struct Unstake<'info> {
     #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
+    pub user_data: Account<'info, UserPDA>,
+    #[account(mut)]
     pub user: Signer<'info>,
     #[account(mut)]
     pub vault: Signer<'info>,
@@ -355,22 +359,22 @@ pub struct VaultState {
     pub max_cooldown: u64,
     pub min_shares: u64,
     pub total_deposits: u64,
+    pub reward_per_deposit: u64,
+    pub last_distribution_amt: u64,
     pub last_distribution_time: u64,
     pub vault_bump: u8,
     pub rewarders: Vec<Pubkey>,
     pub admin: Pubkey,
     pub token: Pubkey,
     pub blacklist: Vec<Pubkey>,
-    pub user_data: Vec<UserData>, 
 }
 
 #[account]
-pub struct UserData {
+pub struct UserPDA {
     pub user: Pubkey,
-    pub pending_deposits: Vec<u64>, // to be added to deposits at next reward
+    pub cooldowns: Vec<(u64, u64)>, // (cooldown_end timestamp, amount of deposit)
     pub deposits: u64,
-    pub yields: u64, 
-    pub cooldown_end: u64,
+    pub reward_tally: u64, 
 }
 
 #[event]
