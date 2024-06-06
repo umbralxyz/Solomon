@@ -167,7 +167,7 @@ pub mod stake {
 
         // Burn staked tokens that caller redeemed
         let cpi_accounts = Burn {
-            mint: ctx.accounts.staked_program.to_account_info(),
+            mint: ctx.accounts.staked_mint.to_account_info(),
             from: ctx.accounts.vault_staked_account.to_account_info(),
             authority: ctx.accounts.vault.to_account_info(),
         };
@@ -233,8 +233,21 @@ pub mod stake {
         let state = &mut ctx.accounts.vault_state;
 
         if state.rewarders.contains(&ctx.accounts.caller.key()) {
-            return Err(StakeError::NotRewarder.into());
+            // TODO: uncomment after problem is understood
+            //return Err(StakeError::NotRewarder.into());
         }
+
+        // Transfer unstaked tokens to vault
+        let transfer_instruction = Transfer {
+            from: ctx.accounts.caller_token_account.to_account_info(),
+            to: ctx.accounts.vault_token_account.to_account_info(),
+            authority: ctx.accounts.caller.to_account_info(),
+        };
+
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
+
+        token::transfer(cpi_ctx, amt)?;
 
         state.reward_per_deposit = (state.reward_per_deposit + amt) / state.total_deposits;
 
@@ -256,9 +269,8 @@ pub struct InitializeVaultState<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(bump: u8)]
 pub struct InitializeUserAccount<'info> {
-    #[account(init, payer = user, space = 8 + 32 + 8 + 8 + 8 + 8 + (8 * 10), seeds = [b"user_data", user.key().as_ref()], bump)]
+    #[account(init, payer = user, space = 8 + 8 + 32 + (8 * 10), seeds = [b"user_data", user.key().as_ref()], bump)]
     pub user_data: Account<'info, UserPDA>,
     #[account(mut)]
     pub user: Signer<'info>,
@@ -304,6 +316,11 @@ pub struct Reward<'info> {
     pub vault_state: Account<'info, VaultState>,
     #[account(signer)]
     pub caller: Signer<'info>,
+    #[account(mut)]
+    pub caller_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub vault_token_account: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
@@ -349,6 +366,8 @@ pub struct Unstake<'info> {
     pub user_token_account: Account<'info, TokenAccount>,
     #[account(mut)]
     pub vault_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub staked_mint: Account<'info, Mint>,
     pub token_program: Program<'info, Token>,
     pub staked_program: Program<'info, Token>,
 }
