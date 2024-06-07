@@ -3,6 +3,22 @@ use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 declare_id!("36axVA5TApdCi8u7LV1ReekkEDJNGKMK2sL8akfi5e4Z");
 
+#[account]
+pub struct VaultState {
+    pub cooldown: u64,
+    pub max_cooldown: u64,
+    pub min_shares: u64,
+    pub total_deposits: u64,
+    pub reward_per_deposit: u64,
+    pub last_distribution_amt: u64,
+    pub last_distribution_time: u64,
+    pub vault_bump: u8,
+    pub rewarders: Vec<Pubkey>,
+    pub admin: Pubkey,
+    pub token: Pubkey,
+    pub blacklist: Vec<Pubkey>,
+}
+
 #[program]
 pub mod stake {
     use anchor_spl::token::{Burn, MintTo};
@@ -370,22 +386,6 @@ pub struct Unstake<'info> {
     pub staked_mint: Account<'info, Mint>,
     pub token_program: Program<'info, Token>,
     pub staked_program: Program<'info, Token>,
-}
-
-#[account]
-pub struct VaultState {
-    pub cooldown: u64,
-    pub max_cooldown: u64,
-    pub min_shares: u64,
-    pub total_deposits: u64,
-    pub reward_per_deposit: u64,
-    pub last_distribution_amt: u64,
-    pub last_distribution_time: u64,
-    pub vault_bump: u8,
-    pub rewarders: Vec<Pubkey>,
-    pub admin: Pubkey,
-    pub token: Pubkey,
-    pub blacklist: Vec<Pubkey>,
 }
 
 #[account]
