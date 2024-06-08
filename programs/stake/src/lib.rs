@@ -118,9 +118,10 @@ pub mod stake {
             authority: ctx.accounts.staked_mint.to_account_info(),
         };
 
-        let cpi_program = ctx.accounts.staked_program.to_account_info();
-        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-
+        let seeds: &[&[u8]] = &[b"vault-token-account", state.admin.as_ref(), state.token.as_ref()];
+        let seeds = &[seeds][..];
+        let cpi_ctx = CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), cpi_accounts, seeds);
+        
         token::mint_to(cpi_ctx, amt)?;
 
         // Update user data and vault
@@ -177,14 +178,14 @@ pub mod stake {
             authority: ctx.accounts.staked_mint.to_account_info(),
         };
         
-        let cpi_program = ctx.accounts.token_program.to_account_info();
-        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+        let seeds: &[&[u8]] = &[b"vault-token-account", state.admin.as_ref(), state.token.as_ref()];
+        let seeds = &[seeds][..];
+        let cpi_ctx = CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), cpi_accounts, seeds);
 
         token::burn(cpi_ctx, deposits)?;
 
         // Clear deposits that were unstaked and update user reward tally and deposits
         user_data.cooldowns.retain(|&(cd, _)| cd >= time);
-        user_data.reward_tally = user_data.deposits * state.reward_per_deposit; // TODO: double check this line and below
         user_data.reward_tally -= state.reward_per_deposit * deposits;
         user_data.deposits -= deposits;
 
@@ -294,7 +295,7 @@ pub struct InitializeVaultState<'info> {
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub admin: Signer<'info>,
-    #[account(init, payer = admin, space = 256, seeds = [b"vault-state", vault_state.admin.as_ref(), vault_state.token.as_ref()], bump)]
+    #[account(init, payer = admin, space = 256, seeds = [b"vault-token-account", vault_state.admin.as_ref(), vault_state.token.as_ref()], bump)]
     pub vault_token_account: Account<'info, TokenAccount>,
     pub system_program: Program<'info, System>,
 }
@@ -354,7 +355,7 @@ pub struct Reward<'info> {
     pub caller: Signer<'info>,
     #[account(mut)]
     pub caller_token_account: Account<'info, TokenAccount>,
-    #[account(seeds = [b"vault-state", vault_state.admin.as_ref(), vault_state.token.as_ref()], bump)]
+    #[account(seeds = [b"vault-token-account", vault_state.admin.as_ref(), vault_state.token.as_ref()], bump)]
     pub vault_token_account: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
@@ -373,7 +374,7 @@ pub struct Stake<'info> {
     pub user_staked_account: Account<'info, TokenAccount>,
     #[account(mut)]
     pub user_token_account: Account<'info, TokenAccount>,
-    #[account(seeds = [b"vault-state", vault_state.admin.as_ref(), vault_state.token.as_ref()], bump)]
+    #[account(seeds = [b"vault-token-account", vault_state.admin.as_ref(), vault_state.token.as_ref()], bump)]
     pub vault_token_account: Account<'info, TokenAccount>,
     /// CHECK: the token to mint
     #[account(mut)]
@@ -396,7 +397,7 @@ pub struct Unstake<'info> {
     pub user_staked_account: Account<'info, TokenAccount>,
     #[account(mut)]
     pub user_token_account: Account<'info, TokenAccount>,
-    #[account(seeds = [b"vault-state", vault_state.admin.as_ref(), vault_state.token.as_ref()], bump)]
+    #[account(seeds = [b"vault-token-account", vault_state.admin.as_ref(), vault_state.token.as_ref()], bump)]
     pub vault_token_account: Account<'info, TokenAccount>,
     #[account(mut)]
     pub staked_mint: Account<'info, Mint>,
