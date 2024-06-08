@@ -64,7 +64,7 @@ pub mod stake {
         token::mint_to(cpi_ctx, amt)?;
 
         Ok(())
-    } 
+    }
 
     pub fn initialize_vault_state(
         ctx: Context<InitializeVaultState>,
@@ -136,7 +136,11 @@ pub mod stake {
             &[ctx.bumps.staking_token],
         ];
         let seeds = &[seeds][..];
-        let cpi_ctx = CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), cpi_accounts, seeds);
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts,
+            seeds,
+        );
 
         token::mint_to(cpi_ctx, amt)?;
 
@@ -213,7 +217,7 @@ pub mod stake {
         let cpi_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             cpi_accounts,
-            seeds
+            seeds,
         );
 
         token::burn(cpi_ctx, deposits)?;
@@ -392,14 +396,13 @@ pub struct InitializeUserAccount<'info> {
     )]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
-
     pub user: Signer<'info>,
 }
 
 #[derive(Accounts)]
 pub struct MintToken<'info> {
     pub token_program: Program<'info, Token>,
-    
+
     #[account(
         mut,
         seeds = [STAKING_TOKEN_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.key().as_ref()],
@@ -458,21 +461,18 @@ pub struct Reward<'info> {
 #[derive(Accounts)]
 pub struct Stake<'info> {
     pub token_program: Program<'info, Token>,
-
     #[account(
         mut,
         seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
-
     #[account(
         mut,
         seeds = [USER_DATA_SEED, user.key().as_ref(), vault_state.key().as_ref()], 
         bump
     )]
     pub user_data: Account<'info, UserPDA>,
-
     /// THe user deposit token account, were going to transfer from this
     #[account(
         mut,
@@ -480,7 +480,6 @@ pub struct Stake<'info> {
         token::authority = user,
     )]
     pub user_deposit_token_account: Account<'info, TokenAccount>,
-
     /// The users staking token account, were going to mint to this
     #[account(
         mut,
@@ -488,7 +487,6 @@ pub struct Stake<'info> {
         token::authority = user,
     )]
     pub user_staking_token_account: Account<'info, TokenAccount>,
-
     /// The vaults ATA for the deposit token
     #[account(
         mut,
@@ -496,14 +494,12 @@ pub struct Stake<'info> {
         bump
     )]
     pub vault_token_account: Account<'info, TokenAccount>,
-
     #[account(
         mut,
         seeds = [STAKING_TOKEN_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.key().as_ref()],
         bump
     )]
     pub staking_token: Account<'info, Mint>,
-
     #[account(mut)]
     pub user: Signer<'info>,
 }
@@ -511,7 +507,7 @@ pub struct Stake<'info> {
 #[derive(Accounts)]
 pub struct Unstake<'info> {
     pub token_program: Program<'info, Token>,
-    
+
     #[account(
         mut,
         seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
@@ -527,7 +523,6 @@ pub struct Unstake<'info> {
     pub user_data: Account<'info, UserPDA>,
 
     // todo
-
     #[account(
         mut,
         token::mint = staking_token,
@@ -550,7 +545,7 @@ pub struct Unstake<'info> {
         bump
     )]
     pub vault_token_account: Account<'info, TokenAccount>,
-    
+
     #[account(
         mut,
         seeds = [STAKING_TOKEN_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.key().as_ref()],
@@ -561,7 +556,6 @@ pub struct Unstake<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 }
-
 
 #[derive(Accounts)]
 pub struct SetCooldownDuration<'info> {
