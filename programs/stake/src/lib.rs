@@ -87,6 +87,7 @@ pub mod stake {
     }
 
     pub fn stake(ctx: Context<Stake>, amt: u64) -> Result<()> {
+        distribute(&mut ctx.accounts.vault_state)?;
         let state = &mut ctx.accounts.vault_state;
         let user_data = &mut ctx.accounts.user_data;
 
@@ -126,7 +127,7 @@ pub mod stake {
         let new_cd_end = Clock::get()?.unix_timestamp as u64 + state.cooldown;
         user_data.cooldowns.push((new_cd_end, amt));
         user_data.deposits += amt;
-        user_data.reward_tally += state.reward_per_deposit + amt;
+        user_data.reward_tally += state.reward_per_deposit * amt;
         state.total_deposits += amt;
 
         emit!(StakeEvent {
@@ -138,15 +139,16 @@ pub mod stake {
     }
 
     pub fn unstake(ctx: Context<Unstake>) -> Result<()> {
+        distribute(&mut ctx.accounts.vault_state)?;
         // Withdraws the assets that have cooled down and all yield generated
         let state = &mut ctx.accounts.vault_state;
 
-        let clock = Clock::get()?.unix_timestamp as u64;
+        let time = Clock::get()?.unix_timestamp as u64;
 
         let mut deposits = ctx.accounts.user_data.deposits; // TODO: consider renaming this
         
         for (cd, hold) in &ctx.accounts.user_data.cooldowns {
-            if cd >= &clock {
+            if cd >= &time {
                 deposits -= hold; // don't unstake assets that have not cooled down
             }
         }
@@ -181,7 +183,7 @@ pub mod stake {
         token::burn(cpi_ctx, deposits)?;
 
         // Clear deposits that were unstaked and update user reward tally and deposits
-        user_data.cooldowns.retain(|&(cd, _)| cd >= clock);
+        user_data.cooldowns.retain(|&(cd, _)| cd >= time);
         user_data.reward_tally = user_data.deposits * state.reward_per_deposit; // TODO: double check this line and below
         user_data.reward_tally -= state.reward_per_deposit * deposits;
         user_data.deposits -= deposits;
@@ -241,6 +243,7 @@ pub mod stake {
 
     pub fn reward(ctx: Context<Reward>, amt: u64) -> Result<()> {
         // amt = total yield to distribute
+        distribute(&mut ctx.accounts.vault_state)?;
         
         let state = &mut ctx.accounts.vault_state;
 
@@ -261,14 +264,27 @@ pub mod stake {
 
         token::transfer(cpi_ctx, amt)?;
 
-        state.reward_per_deposit = (state.reward_per_deposit + amt) / state.total_deposits;
-
-        state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
-
-        ctx.accounts.vault_state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
+        ctx.accounts.vault_state.last_distribution_amt += amt;
 
         Ok(())
     }
+}
+
+pub fn distribute(state: &mut VaultState) -> Result<u64> {
+    let time = Clock::get()?.unix_timestamp as u64;
+    let time_passed = time - state.last_distribution_time;
+    let scalar = 1000000000 as u64; // 10^9
+    let mut percentage = 1000000000 as u64; // 10^9
+
+    if time_passed < 28800 {
+        percentage = (percentage * time_passed) / 28800;
+    }
+
+    let amt = (state.last_distribution_amt * percentage) / scalar;
+    state.last_distribution_amt -= amt;
+    state.reward_per_deposit = state.reward_per_deposit + (amt / state.total_deposits);
+    state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
+    Ok(amt)
 }
 
 #[derive(Accounts)]
