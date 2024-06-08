@@ -520,13 +520,6 @@ pub struct SetMaxRedeemPerBlock<'info> {
     pub caller: Signer<'info>,
 }
 
-// #[derive(Debug)]
-// struct TokenMetadata {
-//     ticker: String,
-//     name: String,
-//     address: Pubkey,
-// }
-
 #[event]
 pub struct TransferEvent {
     from: Pubkey,
