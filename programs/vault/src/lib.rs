@@ -16,6 +16,7 @@ pub struct VaultState {
     pub approved_redeemers: Vec<Pubkey>,
     pub managers: Vec<Pubkey>,
     pub admin: Pubkey,
+    pub bump: u8,
 }
 
 #[account]

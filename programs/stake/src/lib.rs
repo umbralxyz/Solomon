@@ -118,7 +118,7 @@ pub mod stake {
             authority: ctx.accounts.staked_mint.to_account_info(),
         };
 
-        let seeds: &[&[u8]] = &[b"vault-token-account", state.admin.as_ref(), state.token.as_ref()];
+        let seeds: &[&[u8]] = &[b"vault-token-account", state.admin.as_ref(), state.token.as_ref(), &[ctx.bumps.vault_token_account]];
         let seeds = &[seeds][..];
         let cpi_ctx = CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), cpi_accounts, seeds);
         
@@ -178,7 +178,7 @@ pub mod stake {
             authority: ctx.accounts.staked_mint.to_account_info(),
         };
         
-        let seeds: &[&[u8]] = &[b"vault-token-account", state.admin.as_ref(), state.token.as_ref()];
+        let seeds: &[&[u8]] = &[b"vault-token-account", state.admin.as_ref(), state.token.as_ref(), &[ctx.bumps.vault_token_account]];
         let seeds = &[seeds][..];
         let cpi_ctx = CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), cpi_accounts, seeds);
 
