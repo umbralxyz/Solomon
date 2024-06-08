@@ -147,7 +147,7 @@ pub mod stake {
         let new_cd_end = Clock::get()?.unix_timestamp as u64 + state.cooldown;
         user_data.cooldowns.push((new_cd_end, amt));
         user_data.deposits += amt;
-        user_data.reward_tally += state.reward_per_deposit * amt;
+        user_data.reward_tally += state.reward_per_deposit * amt / VAULT_TOKEN_SCALAR;
         state.total_deposits += amt;
 
         emit!(StakeEvent {
@@ -177,7 +177,7 @@ pub mod stake {
         let user_data = &mut ctx.accounts.user_data;
 
         // Calculate user yields
-        let yields = user_data.deposits * state.reward_per_deposit - user_data.reward_tally;
+        let yields = user_data.deposits * state.reward_per_deposit / VAULT_TOKEN_SCALAR - user_data.reward_tally;
 
         // Transfer token to caller
         let transfer_instruction = Transfer {
@@ -222,7 +222,7 @@ pub mod stake {
 
         // Clear deposits that were unstaked and update user reward tally and deposits
         user_data.cooldowns.retain(|&(cd, _)| cd >= time);
-        user_data.reward_tally -= state.reward_per_deposit * deposits;
+        user_data.reward_tally -= state.reward_per_deposit * deposits / VAULT_TOKEN_SCALAR;
         user_data.deposits -= deposits;
 
         // Update vault state
