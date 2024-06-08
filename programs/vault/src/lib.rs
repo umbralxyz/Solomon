@@ -12,8 +12,6 @@ const EXCHANGE_RATE_SEED: &[u8] = b"exchange-rate";
 pub struct VaultState {
     pub vault_token_mint: Pubkey,
     pub mint_bump: u8,
-    pub max_mint_per_block: u64,
-    pub max_redeem_per_block: u64,
     pub minted_per_block: u64,
     pub redeemed_per_block: u64,
     pub approved_minters: Vec<Pubkey>,
@@ -41,11 +39,7 @@ pub mod vault {
     pub fn initialize_vault_state(
         ctx: Context<InitializeVaultState>,
         admin: Pubkey,
-        max_mint_per_block: u64,
-        max_redeem_per_block: u64,
     ) -> Result<()> {
-        ctx.accounts.vault_state.max_mint_per_block = max_mint_per_block;
-        ctx.accounts.vault_state.max_redeem_per_block = max_redeem_per_block;
         ctx.accounts.vault_state.minted_per_block = 0;
         ctx.accounts.vault_state.redeemed_per_block = 0;
         ctx.accounts.vault_state.approved_minters = vec![admin];
@@ -79,10 +73,6 @@ pub mod vault {
         let state = &ctx.accounts.vault_state;
         let rate = ctx.accounts.exchange_rate.deposit_rate;
         let amt = collat * rate / DECIMALS_SCALAR;
-
-        if state.redeemed_per_block + amt > state.max_redeem_per_block {
-            return Err(MintError::MaxRedeemExceeded.into());
-        }
 
         let approved_minters = &state.approved_minters;
         if !approved_minters.contains(&ctx.accounts.minter.key()) {
@@ -126,10 +116,6 @@ pub mod vault {
         let rate = ctx.accounts.exchange_rate.redeem_rate;
         let decimals = ctx.accounts.collateral_token_mint.decimals;
         let collat = amt * rate / 10_u64.pow(decimals as u32);
-
-        if state.redeemed_per_block + amt > state.max_redeem_per_block {
-            return Err(MintError::MaxRedeemExceeded.into());
-        }
 
         let approved_minters = &state.approved_minters;
         if !approved_minters.contains(&ctx.accounts.redeemer.key()) {
@@ -319,21 +305,6 @@ pub mod vault {
         let vault_state = &mut ctx.accounts.vault_state;
         vault_state.admin = new_admin;
 
-        Ok(())
-    }
-
-    pub fn set_max_mint_per_block(ctx: Context<SetMaxMintPerBlock>, new_max: u64) -> Result<()> {
-        let vault_state = &mut ctx.accounts.vault_state;
-        vault_state.max_mint_per_block = new_max;
-        Ok(())
-    }
-
-    pub fn set_max_redeem_per_block(
-        ctx: Context<SetMaxRedeemPerBlock>,
-        new_max: u64,
-    ) -> Result<()> {
-        let vault_state = &mut ctx.accounts.vault_state;
-        vault_state.max_redeem_per_block = new_max;
         Ok(())
     }
 }
