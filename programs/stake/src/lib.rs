@@ -73,7 +73,6 @@ pub mod stake {
     ) -> Result<()> {
         let vault_state = &mut ctx.accounts.vault_state;
 
-        // TODO: min shares donation attack protection
         vault_state.max_cooldown = max_cooldown;
         vault_state.cooldown = max_cooldown;
         vault_state.deposit_token = ctx.accounts.deposit_token.key();
@@ -187,7 +186,6 @@ pub mod stake {
             authority: ctx.accounts.vault_token_account.to_account_info(),
         };
 
-        // todo pda sign
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let seeds: &[&[u8]] = &[
             VAULT_TOKEN_ACCOUNT_SEED,
@@ -522,7 +520,6 @@ pub struct Unstake<'info> {
     )]
     pub user_data: Account<'info, UserPDA>,
 
-    // todo
     #[account(
         mut,
         token::mint = staking_token,
