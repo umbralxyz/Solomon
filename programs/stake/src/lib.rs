@@ -14,6 +14,7 @@ const VAULT_STATE_SEED: &[u8] = b"vault-state";
 #[account]
 pub struct VaultState {
     pub admin: Pubkey,
+    pub bump: u8,
 
     pub cooldown: u64,
     pub max_cooldown: u64,
@@ -79,6 +80,7 @@ pub mod stake {
         vault_state.admin = admin;
         vault_state.rewarders = vec![admin];
         vault_state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
+        vault_state.bump = ctx.bumps.vault_state;
 
         Ok(())
     }
@@ -102,6 +104,7 @@ pub mod stake {
 
     pub fn stake(ctx: Context<Stake>, amt: u64) -> Result<()> {
         distribute(&mut ctx.accounts.vault_state)?;
+        let auth = ctx.accounts.vault_state.to_account_info();
         let state = &mut ctx.accounts.vault_state;
         let user_data = &mut ctx.accounts.user_data;
 
@@ -125,14 +128,14 @@ pub mod stake {
         let cpi_accounts = MintTo {
             mint: ctx.accounts.staking_token.to_account_info(),
             to: ctx.accounts.user_staking_token_account.to_account_info(),
-            authority: ctx.accounts.staking_token.to_account_info(),
+            authority: auth,
         };
 
         let seeds: &[&[u8]] = &[
-            STAKING_TOKEN_SEED,
+            VAULT_STATE_SEED,
             state.admin.as_ref(),
             state.deposit_token.as_ref(),
-            &[ctx.bumps.staking_token],
+            &[state.bump],
         ];
         let seeds = &[seeds][..];
         let cpi_ctx = CpiContext::new_with_signer(
@@ -162,6 +165,7 @@ pub mod stake {
         distribute(&mut ctx.accounts.vault_state)?;
 
         // Withdraws the assets that have cooled down and all yield generated
+        let auth = ctx.accounts.vault_state.to_account_info();
         let state = &mut ctx.accounts.vault_state;
 
         let time = Clock::get()?.unix_timestamp as u64;
@@ -180,41 +184,44 @@ pub mod stake {
         let yields = user_data.deposits * state.reward_per_deposit / VAULT_TOKEN_SCALAR - user_data.reward_tally;
 
         // Transfer token to caller
-        let transfer_instruction = Transfer {
+        let accounts = Transfer {
             from: ctx.accounts.vault_token_account.to_account_info(),
             to: ctx.accounts.user_deposit_token_account.to_account_info(),
-            authority: ctx.accounts.vault_token_account.to_account_info(),
+            authority: auth,
         };
 
-        let cpi_program = ctx.accounts.token_program.to_account_info();
         let seeds: &[&[u8]] = &[
-            VAULT_TOKEN_ACCOUNT_SEED,
+            VAULT_STATE_SEED,
             state.admin.as_ref(),
             state.deposit_token.as_ref(),
-            &[ctx.bumps.vault_token_account],
+            &[state.bump],
         ];
         let seeds = &[seeds][..];
-        let cpi_ctx = CpiContext::new_with_signer(cpi_program, transfer_instruction, seeds);
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            accounts,
+            seeds,
+        );
 
         token::transfer(cpi_ctx, deposits + yields)?;
 
         // Burn staked tokens that caller redeemed
-        let cpi_accounts = Burn {
+        let accounts = Burn {
             mint: ctx.accounts.staking_token.to_account_info(),
             from: ctx.accounts.user_staking_token_account.to_account_info(),
             authority: ctx.accounts.staking_token.to_account_info(),
         };
 
         let seeds: &[&[u8]] = &[
-            STAKING_TOKEN_SEED,
+            VAULT_STATE_SEED,
             state.admin.as_ref(),
             state.deposit_token.as_ref(),
-            &[ctx.bumps.staking_token],
+            &[state.bump],
         ];
         let seeds = &[seeds][..];
         let cpi_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
-            cpi_accounts,
+            accounts,
             seeds,
         );
 
@@ -279,7 +286,6 @@ pub mod stake {
     }
 
     pub fn reward(ctx: Context<Reward>, amt: u64) -> Result<()> {
-        // amt = total yield to distribute
         distribute(&mut ctx.accounts.vault_state)?;
 
         let state = &mut ctx.accounts.vault_state;
@@ -306,6 +312,7 @@ pub mod stake {
 }
 
 pub fn distribute(state: &mut VaultState) -> Result<u64> {
+    // called before the first reward, so the clock will not be 0
     if state.last_distribution_amt == 0 {
         state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
         return Ok(0);
