@@ -37,36 +37,6 @@ pub mod stake {
 
     use super::*;
 
-    // todo remove
-    pub fn mint_staked_token(ctx: Context<MintToken>, amt: u64) -> Result<()> {
-        let state = &ctx.accounts.vault_state;
-
-        if ctx.accounts.authority.key() != state.admin {
-            return Err(StakeError::NotAdmin.into());
-        }
-
-        // mint tokens to recipient
-        let cpi_accounts = MintTo {
-            mint: ctx.accounts.staking_token.to_account_info(),
-            to: ctx.accounts.recipient.to_account_info(),
-            authority: ctx.accounts.staking_token.to_account_info(),
-        };
-        let cpi_program = ctx.accounts.token_program.to_account_info();
-
-        let seeds: &[&[u8]] = &[
-            STAKING_TOKEN_SEED,
-            state.admin.as_ref(),
-            state.deposit_token.as_ref(),
-            &[ctx.bumps.staking_token],
-        ];
-        let seeds = &[seeds][..];
-        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, seeds);
-
-        token::mint_to(cpi_ctx, amt)?;
-
-        Ok(())
-    }
-
     pub fn initialize_vault_state(
         ctx: Context<InitializeVaultState>,
         admin: Pubkey,
@@ -406,65 +376,6 @@ pub struct InitializeUserAccount<'info> {
 }
 
 #[derive(Accounts)]
-pub struct MintToken<'info> {
-    pub token_program: Program<'info, Token>,
-
-    #[account(
-        mut,
-        seeds = [STAKING_TOKEN_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.key().as_ref()],
-        bump
-    )]
-    pub staking_token: Account<'info, Mint>,
-
-    /// Warning!: We dont check if the recipient has the same authority as the caller
-    #[account(
-        mut,
-        token::mint = staking_token,
-    )]
-    pub recipient: Account<'info, TokenAccount>,
-
-    #[account(mut)]
-    pub authority: Signer<'info>,
-
-    #[account(
-        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-}
-
-#[derive(Accounts)]
-pub struct Reward<'info> {
-    pub token_program: Program<'info, Token>,
-
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-
-    /// The callers deposit token account
-    #[account(
-        mut,
-        token::mint = vault_state.deposit_token,
-        token::authority = caller,
-    )]
-    pub caller_token_account: Account<'info, TokenAccount>,
-
-    /// The vaults ATA for the deposit token
-    #[account(
-        mut,
-        seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
-        bump
-    )]
-    pub vault_token_account: Account<'info, TokenAccount>,
-
-    #[account(mut)]
-    pub caller: Signer<'info>,
-}
-
-#[derive(Accounts)]
 pub struct Stake<'info> {
     pub token_program: Program<'info, Token>,
     #[account(
@@ -560,6 +471,38 @@ pub struct Unstake<'info> {
 
     #[account(mut)]
     pub user: Signer<'info>,
+}
+
+
+#[derive(Accounts)]
+pub struct Reward<'info> {
+    pub token_program: Program<'info, Token>,
+
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+
+    /// The callers deposit token account
+    #[account(
+        mut,
+        token::mint = vault_state.deposit_token,
+        token::authority = caller,
+    )]
+    pub caller_token_account: Account<'info, TokenAccount>,
+
+    /// The vaults ATA for the deposit token
+    #[account(
+        mut,
+        seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
+        bump
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub caller: Signer<'info>,
 }
 
 #[derive(Accounts)]
