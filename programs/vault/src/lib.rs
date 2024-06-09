@@ -142,10 +142,10 @@ pub mod vault {
         let cpi_accounts = Burn {
             mint: ctx.accounts.vault_token_mint.to_account_info(),
             from: ctx.accounts.caller_vault_token.to_account_info(),
-            authority: ctx.accounts.vault_token_mint.to_account_info(),
+            authority: ctx.accounts.vault_state.to_account_info(),
         };
 
-        let seeds: &[&[u8]] = &[MINT_SEED.as_ref(), &[ctx.bumps.vault_token_mint]];
+        let seeds: &[&[u8]] = &[VAULT_STATE_SEED, &[ctx.bumps.vault_state]];
         let seeds = &[seeds][..];
         let cpi_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
