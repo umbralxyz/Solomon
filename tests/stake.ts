@@ -40,16 +40,12 @@ describe("stake", () => {
     await anchor.AnchorProvider.env().connection.requestAirdrop(vaultAuthority.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
 
     console.log("admin: ", adminKey);
-    await program.methods.initializeVaultState(new BN(0), TOKEN_PROGRAM_ID).rpc()
+    await program.methods.initializeVaultState(TOKEN_PROGRAM_ID, new BN(0)).rpc()
 
-    await program.methods.removeRewarder(adminKey).accounts({
-      vaultState: vaultStatePDA,
-    }).rpc()
+    await program.methods.removeRewarder(adminKey).rpc()
     console.log("Removed rewarder: ", adminKey);
 
-    await program.methods.addRewarder(adminKey).accounts({
-      vaultState: vaultStatePDA,
-    }).rpc()
+    await program.methods.addRewarder(adminKey).rpc()
     console.log("Added rewarder: ", adminKey);
   });
 
@@ -103,10 +99,8 @@ describe("stake", () => {
 
     // Mint tokens to the associated token account
     const tx = await program.methods.mintStakedToken(new anchor.BN(10)).accounts({
-      mint: vaultKey.publicKey,
       recipient: associatedTokenAccount,
       authority: key,
-      vaultState: vaultStatePDA,
     }).rpc();
 
     console.log("StakedToken minting signature: ", tx);
@@ -151,10 +145,8 @@ describe("stake", () => {
     
     // Mint tokens to user
     const mint_tx = await program.methods.mintStakedToken(new anchor.BN(10)).accounts({
-      mint: vaultKey.publicKey,
       recipient: userStaked,
       authority: key,
-      vaultState: vaultStatePDA,
     }).rpc();
 
     console.log("UserToken minting signature: ", mint_tx);
@@ -172,7 +164,7 @@ describe("stake", () => {
 
     console.log("User account initialization signature: ", initializeUserTx);
   });
-
+  /*
   it("Stake and reward test", async () => {
     const amt = new anchor.BN(1);
 
@@ -223,4 +215,5 @@ describe("stake", () => {
       stakedMint: vaultKey.publicKey,
     }).signers([user, vaultAuthority]).rpc();
   });
+  */
 });

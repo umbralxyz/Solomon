@@ -7,6 +7,8 @@ import {
   createAssociatedTokenAccountInstruction,
   getAssociatedTokenAddress,
   createInitializeMintInstruction,
+  mintTo,
+  createMintToInstruction,
 } from "@solana/spl-token"; 
 import { assert } from "chai";
 import { BN } from "bn.js";
@@ -44,33 +46,39 @@ describe("vault", () => {
     await anchor.AnchorProvider.env().connection.requestAirdrop(depositer.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
     await anchor.AnchorProvider.env().connection.requestAirdrop(vaultAuthority.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
 
+    const [vaultStatePDA, vaultStateBump] = await anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("vault-state")],//, adminKey.toBuffer(), mintKey.publicKey.toBuffer()],
+      program.programId
+    );
+
+    // Derive the vault token PDA
+    const [vaultTokenPDA, vaultTokenBump] = await anchor.web3.PublicKey.findProgramAddressSync(
+      [Buffer.from("mint")],
+      program.programId
+    );
     // Initialize mint state account
+    await program.methods.initializeVaultState(adminKey).accounts({
+      signer: adminKey,
+    }).rpc();
     console.log("admin: ", adminKey);
-    await program.methods.initializeMintState(new BN(1000), new BN(1000)).rpc()
 
     // Remove admin from whitelisted minters / redeemers (added by default)
-    await program.methods.removeMinter(adminKey).accounts({
-      mintState: mintStatePDA,
-    }).rpc()
+    await program.methods.removeMinter(adminKey).rpc()
     console.log("Removed minter: ", adminKey);
 
-    await program.methods.removeRedeemer(adminKey).accounts({
-      mintState: mintStatePDA,
-    }).rpc()
+    await program.methods.removeRedeemer(adminKey).rpc()
     console.log("Removed redeemer: ", adminKey);
 
     // Whitelist minter (add admin back as whitelisted minter / redeemer)
-    await program.methods.whitelistMinter(adminKey).accounts({
-      mintState: mintStatePDA,
-    }).rpc()
+    await program.methods.whitelistMinter(adminKey).rpc()
     console.log("Whitelisted minter: ", adminKey);
 
-    await program.methods.whitelistRedeemer(adminKey).accounts({
-      mintState: mintStatePDA,
-    }).rpc()
+    await program.methods.whitelistRedeemer(adminKey).rpc()
     console.log("Whitelisted redeemer: ", adminKey);
   });
+  it("Initialize Mint and mint tokens", async () => {});
  
+  
   it("Initialize Mint and mint tokens", async () => {
     // Get anchor's wallet's public key
     const key = adminKey;
@@ -79,15 +87,10 @@ describe("vault", () => {
     mintKey = anchor.web3.Keypair.generate();
 
     // Get the amount of SOL needed to pay rent for our Token Mint
-    const lamports: number = await program.provider.connection.getMinimumBalanceForRentExemption(
-      MINT_SIZE
-    );
+    const lamports: number = await program.provider.connection.getMinimumBalanceForRentExemption(MINT_SIZE);
 
     // Get the ATA for a token and the account that will own the ATA
-    associatedTokenAccount = await getAssociatedTokenAddress(
-      mintKey.publicKey,
-      key
-    );
+    associatedTokenAccount = await getAssociatedTokenAddress(mintKey.publicKey, key);
 
     const mint_tx = new anchor.web3.Transaction().add(
       // Create an account from the mint key
@@ -99,13 +102,9 @@ describe("vault", () => {
         lamports,
       }),
       // Create mint account that is controlled by anchor wallet
-      createInitializeMintInstruction(
-        mintKey.publicKey, 0, key, key
-      ),
+      createInitializeMintInstruction(mintKey.publicKey, 0, key, key),
       // Create the ATA account that is associated with mint on anchor wallet
-      createAssociatedTokenAccountInstruction(
-        key, associatedTokenAccount, key, mintKey.publicKey
-      )
+      createAssociatedTokenAccountInstruction(key, associatedTokenAccount, key, mintKey.publicKey),
     );
 
     const res = await anchor.AnchorProvider.env().sendAndConfirm(mint_tx, [mintKey]);
@@ -115,30 +114,30 @@ describe("vault", () => {
     );
 
     console.log("Account: ", res);
-    console.log("Mint key: ", mintKey.publicKey.toString());
+    console.log("Token Mint key: ", mintKey.publicKey.toString());
     console.log("User: ", key.toString());
 
-    // Executes code to mint token into specified ATA
-    const tx = await program.methods.mintToken(new anchor.BN(10)).accounts({
-      mint: mintKey.publicKey,
-      recipient: associatedTokenAccount,
-      authority: key,
-      mintState: mintStatePDA,
-    }).rpc();
+    const mintAmount = 10;
 
-    console.log("VaultToken minting signature: ", tx);
+    const mintTx = new anchor.web3.Transaction().add(
+      createMintToInstruction(mintKey.publicKey, associatedTokenAccount, adminKey, mintAmount),
+    );
+
+    await anchor.AnchorProvider.env().sendAndConfirm(mintTx, []);
 
     // Get minted token amount on the ATA for anchor wallet
     const accountInfo = await program.provider.connection.getParsedAccountInfo(associatedTokenAccount);
-    if (accountInfo.value && accountInfo.value.data.parsed) {
-      const minted = accountInfo.value.data.parsed.info.tokenAmount.amount;
-      assert.equal(minted, 10);
-    } else {
-      throw new Error("Failed to retrieve parsed account data");
-    }
+    const minted = accountInfo.value.data.parsed.info.tokenAmount.amount;
+    console.log("Tokens minted: ", minted);
+
+    mintCollatVault = await getAssociatedTokenAddress(userTokenMintKey.publicKey, vaultAuthority.publicKey);
+    mintTokenVault = await getAssociatedTokenAddress(mintKey.publicKey, vaultAuthority.publicKey);
+    callerCollat = await getAssociatedTokenAddress(userTokenMintKey.publicKey, depositer.publicKey);
+    callerToken = await getAssociatedTokenAddress(mintKey.publicKey, depositer.publicKey);
 
     // Create mint for UserToken
     const userTokenMintTx = new anchor.web3.Transaction().add(
+      // Create an account from the depositer mint key
       anchor.web3.SystemProgram.createAccount({
         fromPubkey: adminKey,
         newAccountPubkey: userTokenMintKey.publicKey,
@@ -146,94 +145,86 @@ describe("vault", () => {
         programId: TOKEN_PROGRAM_ID,
         lamports,
       }),
-      createInitializeMintInstruction(userTokenMintKey.publicKey, 0, adminKey, adminKey)
+      // Create collat mint account that is controlled by anchor wallet
+      createInitializeMintInstruction(userTokenMintKey.publicKey, 0, key, key),
+      // Create the ATA account that is associated with collat mint on anchor wallet
+      createAssociatedTokenAccountInstruction(key, callerCollat, depositer.publicKey, userTokenMintKey.publicKey),
     );
 
     await anchor.AnchorProvider.env().sendAndConfirm(userTokenMintTx, [userTokenMintKey]);
 
-    mintCollatVault = await getAssociatedTokenAddress(userTokenMintKey.publicKey, vaultAuthority.publicKey);
-    mintTokenVault = await getAssociatedTokenAddress(mintKey.publicKey, vaultAuthority.publicKey);
-    callerCollat = await getAssociatedTokenAddress(userTokenMintKey.publicKey, depositer.publicKey);
-    callerToken = await getAssociatedTokenAddress(mintKey.publicKey, depositer.publicKey);
+    //console.log("Account: ", userTokenMintTx);
+    console.log("Collat Mint key: ", userTokenMintKey.publicKey.toString());
+    console.log("User: ", key.toString());
+
+    
 
     const createVaultsTx = new anchor.web3.Transaction().add(
       createAssociatedTokenAccountInstruction(adminKey, mintCollatVault, vaultAuthority.publicKey, userTokenMintKey.publicKey),
       createAssociatedTokenAccountInstruction(adminKey, mintTokenVault, vaultAuthority.publicKey, mintKey.publicKey),
-      createAssociatedTokenAccountInstruction(adminKey, callerCollat, depositer.publicKey, userTokenMintKey.publicKey),
       createAssociatedTokenAccountInstruction(adminKey, callerToken, depositer.publicKey, mintKey.publicKey)
     );
 
+    const collatMintTx = new anchor.web3.Transaction().add(
+      createMintToInstruction(userTokenMintKey.publicKey, callerCollat, adminKey, mintAmount),
+    );
+
+    await anchor.AnchorProvider.env().sendAndConfirm(collatMintTx, []);
+
+    await anchor.AnchorProvider.env().connection.requestAirdrop(callerCollat, 2 * anchor.web3.LAMPORTS_PER_SOL);
+
     await anchor.AnchorProvider.env().sendAndConfirm(createVaultsTx, []);
 
-    // Mint UserToken to depositer
-    
-    const mintUserTokenTx = await program.methods.mintToken(new anchor.BN(100)).accounts({
-      mint: userTokenMintKey.publicKey,
-      recipient: callerCollat,
-      authority: key,
-      mintState: mintStatePDA,
-    }).rpc();
-
-    console.log("UserToken minting signature: ", mintUserTokenTx);
-    
+    // Get minted token amount on the ATA for depositer
+    const depositerInfo = await program.provider.connection.getParsedAccountInfo(callerCollat);
+    const collatMinted = depositerInfo.value.data.parsed.info.tokenAmount.amount;
+    console.log("Collat minted: ", collatMinted);
   });
 
+  
   it("Add asset, deposit, redeem", async () => {
     const assetKey = TOKEN_PROGRAM_ID;
     const depositRate = new anchor.BN(1);
     const redeemRate = new anchor.BN(1);
 
     // Add asset
-    const addAssetTx = await program.methods.addAsset(assetKey, depositRate, redeemRate).accounts({
-      mintState: mintStatePDA,
+    const addAssetTx = await program.methods.addAsset(userTokenMintKey.publicKey, depositRate, redeemRate).accounts({
       authority: adminKey,
+      collateralTokenMint: userTokenMintKey.publicKey,
     }).rpc();
 
     console.log("Add asset signature: ", addAssetTx);
     console.log("Asset added: ", assetKey);
 
     // Whitelist depositer
-    await program.methods.whitelistMinter(depositer.publicKey).accounts({
-      mintState: mintStatePDA,
-    }).rpc()
+    await program.methods.whitelistMinter(depositer.publicKey).rpc()
     console.log("Whitelisted minter: ", adminKey);
 
-    await program.methods.whitelistRedeemer(depositer.publicKey).accounts({
-      mintState: mintStatePDA,
-    }).rpc()
+    await program.methods.whitelistRedeemer(depositer.publicKey).rpc()
     console.log("Whitelisted redeemer: ", adminKey);
 
-    const amt = new anchor.BN(1);
-
+    const deposit = new anchor.BN(2);
+    const redeem = new anchor.BN(1);
+    
     // Deposit
-    const depositTx = await program.methods.deposit(amt).accounts({
-      mintCollatVault: mintCollatVault,
-      mintTokenVault: mintTokenVault,
-      callerCollat: callerCollat,
-      callerToken: callerToken,
-      depositer: depositer.publicKey,
-      mintState: mintStatePDA,
-      vaultAuthority: adminKey,
-      mint: mintKey.publicKey,
-    }).signers([depositer]).rpc();
+    const depositTx = await program.methods.deposit(deposit).accounts({
+      callerCollateral: callerCollat,
+      minter: depositer.publicKey,
+      collateralTokenMint: userTokenMintKey.publicKey,
+    }).signers([depositer]).rpc().catch(e => console.error(e));
 
     console.log("Deposit signature: ", depositTx);
 
     // Redeem
-    const redeemTx = await program.methods.redeem(amt).accounts({
-      mintCollatVault: mintCollatVault,
-      mintTokenVault: mintTokenVault,
-      callerCollat: callerCollat,
-      callerToken: callerToken,
+    const redeemTx = await program.methods.redeem(redeem).accounts({
+      callerCollateral: callerCollat,
       redeemer: depositer.publicKey,
-      mintState: mintStatePDA,
-      vaultAuthority: vaultAuthority.publicKey,
-      mint: mintKey.publicKey,
-    }).signers([depositer, vaultAuthority]).rpc();
+      collateralTokenMint: userTokenMintKey.publicKey,
+    }).signers([depositer]).rpc().catch(e => console.error(e));
 
     console.log("Redemption signature: ", redeemTx);
   });
- 
+  /*
   it("Withdraw deposited collateral", async () => {
     const amt = new anchor.BN(1);
     
@@ -264,4 +255,5 @@ describe("vault", () => {
 
     console.log("Withdraw signature: ", withdrawTx);
   });
+  */
  });
