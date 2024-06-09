@@ -46,6 +46,7 @@ pub mod vault {
         ctx.accounts.vault_state.approved_redeemers = vec![admin];
         ctx.accounts.vault_state.admin = admin;
         ctx.accounts.vault_state.vault_token_mint = ctx.accounts.vault_token.key();
+        ctx.accounts.vault_state.bump = ctx.bumps.vault_state;
 
         Ok(())
     }
@@ -95,10 +96,10 @@ pub mod vault {
         let cpi_accounts = MintTo {
             mint: ctx.accounts.vault_token_mint.to_account_info(),
             to: ctx.accounts.caller_vault_token.to_account_info(),
-            authority: ctx.accounts.vault_token_mint.to_account_info(),
+            authority: ctx.accounts.vault_state.to_account_info(),
         };
 
-        let seeds: &[&[u8]] = &[MINT_SEED.as_ref(), &[ctx.bumps.vault_token_mint]];
+        let seeds: &[&[u8]] = &[VAULT_STATE_SEED.as_ref(), &[ctx.accounts.vault_state.bump]];
         let seeds = &[seeds][..];
         let cpi_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
@@ -322,7 +323,7 @@ pub struct InitializeVaultState<'info> {
         init, 
         payer = signer, 
         mint::decimals = 9, 
-        mint::authority = vault_token,
+        mint::authority = vault_state,
         seeds = [MINT_SEED], 
         bump
     )]
