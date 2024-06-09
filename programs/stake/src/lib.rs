@@ -386,6 +386,12 @@ pub struct InitializeUserAccount<'info> {
     pub system_program: Program<'info, System>,
 
     #[account(
+        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+
+    #[account(
         init, 
         payer = user, 
         space = 8 + 8 + 32 + (8 * 10), 
@@ -395,11 +401,6 @@ pub struct InitializeUserAccount<'info> {
     )]
     pub user_data: Account<'info, UserPDA>,
 
-    #[account(
-        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub user: Signer<'info>,
 }
@@ -474,6 +475,12 @@ pub struct Stake<'info> {
     pub vault_state: Account<'info, VaultState>,
     #[account(
         mut,
+        seeds = [STAKING_TOKEN_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.key().as_ref()],
+        bump
+    )]
+    pub staking_token: Account<'info, Mint>,
+    #[account(
+        mut,
         seeds = [USER_DATA_SEED, user.key().as_ref(), vault_state.key().as_ref()], 
         bump
     )]
@@ -499,12 +506,6 @@ pub struct Stake<'info> {
         bump
     )]
     pub vault_token_account: Account<'info, TokenAccount>,
-    #[account(
-        mut,
-        seeds = [STAKING_TOKEN_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.key().as_ref()],
-        bump
-    )]
-    pub staking_token: Account<'info, Mint>,
     #[account(mut)]
     pub user: Signer<'info>,
 }
@@ -519,6 +520,13 @@ pub struct Unstake<'info> {
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
+
+    #[account(
+        mut,
+        seeds = [STAKING_TOKEN_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.key().as_ref()],
+        bump
+    )]
+    pub staking_token: Account<'info, Mint>,
 
     #[account(
         mut,
@@ -549,13 +557,6 @@ pub struct Unstake<'info> {
         bump
     )]
     pub vault_token_account: Account<'info, TokenAccount>,
-
-    #[account(
-        mut,
-        seeds = [STAKING_TOKEN_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.key().as_ref()],
-        bump
-    )]
-    pub staking_token: Account<'info, Mint>,
 
     #[account(mut)]
     pub user: Signer<'info>,
