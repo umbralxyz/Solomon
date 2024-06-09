@@ -5,14 +5,13 @@ declare_id!("A3p6U1p5jjZQbu346LrJb1asrTjkEPhDkfH4CXCYgpEd");
 
 const DECIMALS_SCALAR: u64 = 1_000_000_000;
 const MINT_SEED: &[u8] = b"mint";
-const ASSET_SEED: &[u8] = b"asset";
 const TOKEN_ATA_SEED: &[u8] = b"token-account";
 const EXCHANGE_RATE_SEED: &[u8] = b"exchange-rate";
+const VAULT_STATE_SEED: &[u8] = b"vault-state";
 
 #[account]
 pub struct VaultState {
     pub vault_token_mint: Pubkey,
-    pub mint_bump: u8,
     pub minted_per_block: u64,
     pub redeemed_per_block: u64,
     pub approved_minters: Vec<Pubkey>,
@@ -47,7 +46,7 @@ pub mod vault {
         ctx.accounts.vault_state.approved_redeemers = vec![admin];
         ctx.accounts.vault_state.admin = admin;
         ctx.accounts.vault_state.vault_token_mint = ctx.accounts.vault_token.key();
-        ctx.accounts.vault_state.mint_bump = ctx.bumps.vault_token;
+        ctx.accounts.vault_state.bump = ctx.accounts.vault_state.bump;
 
         Ok(())
     }
@@ -97,10 +96,10 @@ pub mod vault {
         let cpi_accounts = MintTo {
             mint: ctx.accounts.vault_token_mint.to_account_info(),
             to: ctx.accounts.caller_vault_token.to_account_info(),
-            authority: ctx.accounts.vault_token_mint.to_account_info(),
+            authority: ctx.accounts.vault_state.to_account_info(),
         };
 
-        let seeds: &[&[u8]] = &[MINT_SEED.as_ref(), &[ctx.bumps.vault_token_mint]];
+        let seeds: &[&[u8]] = &[VAULT_STATE_SEED.as_ref(), &[ctx.accounts.vault_state.bump]];
         let seeds = &[seeds][..];
         let cpi_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
@@ -130,7 +129,7 @@ pub mod vault {
             authority: ctx.accounts.vault_state.to_account_info(),
         };
 
-        let seeds: &[&[u8]] = &[b"vault-state", &[ctx.bumps.vault_state]];
+        let seeds: &[&[u8]] = &[VAULT_STATE_SEED, &[ctx.accounts.vault_state.bump]];
         let seeds = &[seeds][..];
         let cpi_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
@@ -168,11 +167,10 @@ pub mod vault {
         let transfer_instruction = Transfer {
             from: ctx.accounts.program_collat.to_account_info(),
             to: ctx.accounts.caller.to_account_info(),
-            authority: ctx.accounts.program_collat.to_account_info(),
+            authority: ctx.accounts.vault_state.to_account_info(),
         };
 
-        let token = ctx.accounts.collat_mint.key();
-        let seeds: &[&[u8]] = &[TOKEN_ATA_SEED, token.as_ref(), &[ctx.bumps.program_collat]];
+        let seeds: &[&[u8]] = &[VAULT_STATE_SEED, &[ctx.accounts.vault_state.bump]];
         let seeds = &[seeds][..];
         let cpi_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
@@ -308,15 +306,15 @@ pub mod vault {
 #[derive(Accounts)]
 #[instruction(admin: Pubkey)]
 pub struct InitializeVaultState<'info> {
-    #[account(mut)]
-    pub signer: Signer<'info>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
 
     // todo: space
     #[account(
         init, 
         payer = signer, 
         space = 256,
-        seeds = [b"vault-state"],//\\, signer.key().as_ref(), vault_token.key().as_ref()],
+        seeds = [VAULT_STATE_SEED],
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
@@ -330,9 +328,9 @@ pub struct InitializeVaultState<'info> {
         bump
     )]
     pub vault_token: Account<'info, Mint>,
-    
-    pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
+
+    #[account(mut)]
+    pub signer: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -364,11 +362,7 @@ pub struct AddAsset<'info> {
     #[account(mut)]
     pub collateral_token_mint: Account<'info, Mint>,
 
-    #[account(
-        mut,
-        seeds = [b"vault-state"],//, signer.key().as_ref(), vault_token.key().as_ref()],
-        bump
-    )]
+    #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -396,10 +390,6 @@ pub struct Deposit<'info> {
     pub caller_collateral: Account<'info, TokenAccount>,
     /// The caller owned vault token ATA
     #[account(
-        init_if_needed,
-        seeds = [minter.key().as_ref(), vault_state.key().as_ref()],
-        bump,
-        payer = minter,
         token::mint = vault_token_mint,
         token::authority = minter,
     )]
@@ -422,11 +412,7 @@ pub struct Deposit<'info> {
     /// that is owned by this program and associated with this mint
     #[account(mut)]
     pub collateral_token_mint: Account<'info, Mint>,
-    #[account(
-        mut,
-        seeds = [b"vault-state"],//, signer.key().as_ref(), vault_token.key().as_ref()],
-        bump
-    )]
+    #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub minter: Signer<'info>,
@@ -454,11 +440,10 @@ pub struct Redeem<'info> {
     /// The caller owned vault token ATA
     #[account(
         mut,
-        seeds = [redeemer.key().as_ref(), vault_state.key().as_ref()],
-        bump
+        token::mint = vault_token_mint,
+        token::authority = redeemer,
     )]
     pub caller_vault_token: Account<'info, TokenAccount>,
-    /// The minter
     #[account(
         seeds = [EXCHANGE_RATE_SEED, collateral_token_mint.key().as_ref()],
         bump,
@@ -472,14 +457,13 @@ pub struct Redeem<'info> {
     )]
     pub vault_token_mint: Account<'info, Mint>,
 
-    #[account(
-        mut,
-        seeds = [b"vault-state"],//, signer.key().as_ref(), vault_token.key().as_ref()],
-        bump
-    )]
+    #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub redeemer: Signer<'info>,
+    /// The collateral token mint address,
+    /// we dont need any contraints here becauase we also need an exchange rate address
+    /// that is owned by this program and associated with this mint
     #[account(mut)]
     pub collateral_token_mint: Account<'info, Mint>,
 }
@@ -499,21 +483,13 @@ pub struct Withdraw<'info> {
     pub caller: Account<'info, TokenAccount>,
     #[account(mut)]
     pub collat_mint: Account<'info, Mint>,
-    #[account(
-        mut,
-        seeds = [b"vault-state"],//, signer.key().as_ref(), vault_token.key().as_ref()],
-        bump
-    )]
+    #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
 }
 
 #[derive(Accounts)]
 pub struct Minters<'info> {
-    #[account(
-        mut,
-        seeds = [b"vault-state"],//, signer.key().as_ref(), vault_token.key().as_ref()],
-        bump
-    )]
+    #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub caller: Signer<'info>,
@@ -521,11 +497,7 @@ pub struct Minters<'info> {
 
 #[derive(Accounts)]
 pub struct Redeemers<'info> {
-    #[account(
-        mut,
-        seeds = [b"vault-state"],//, signer.key().as_ref(), vault_token.key().as_ref()],
-        bump
-    )]
+    #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub caller: Signer<'info>,
@@ -533,11 +505,7 @@ pub struct Redeemers<'info> {
 
 #[derive(Accounts)]
 pub struct Managers<'info> {
-    #[account(
-        mut,
-        seeds = [b"vault-state"],//, signer.key().as_ref(), vault_token.key().as_ref()],
-        bump
-    )]
+    #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub caller: Signer<'info>,
@@ -545,11 +513,7 @@ pub struct Managers<'info> {
 
 #[derive(Accounts)]
 pub struct TransferAdmin<'info> {
-    #[account(
-        mut,
-        seeds = [b"vault-state"],//, signer.key().as_ref(), vault_token.key().as_ref()],
-        bump
-    )]
+    #[account(mut)]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub caller: Signer<'info>,
