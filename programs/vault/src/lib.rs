@@ -142,15 +142,12 @@ pub mod vault {
         let cpi_accounts = Burn {
             mint: ctx.accounts.vault_token_mint.to_account_info(),
             from: ctx.accounts.caller_vault_token.to_account_info(),
-            authority: ctx.accounts.vault_state.to_account_info(),
+            authority: ctx.accounts.redeemer.to_account_info(),
         };
 
-        let seeds: &[&[u8]] = &[VAULT_STATE_SEED, &[ctx.bumps.vault_state]];
-        let seeds = &[seeds][..];
-        let cpi_ctx = CpiContext::new_with_signer(
+        let cpi_ctx = CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
             cpi_accounts,
-            seeds,
         );
         token::burn(cpi_ctx, amt)?;
 
@@ -313,7 +310,7 @@ pub struct InitializeVaultState<'info> {
     #[account(
         init, 
         payer = signer, 
-        space = 256,
+        space = 512,
         seeds = [VAULT_STATE_SEED],
         bump
     )]
