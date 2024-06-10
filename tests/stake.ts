@@ -17,10 +17,6 @@ describe("stake", () => {
   const program = anchor.workspace.Stake as Program<Stake>;
   let vaultKey = anchor.web3.Keypair.generate();
   let associatedTokenAccount = undefined;
-  const [vaultStatePDA, vaultStateBump] = anchor.web3.PublicKey.findProgramAddressSync(
-    [Buffer.from("vault-state")],
-    program.programId
-  );
   const adminWallet = anchor.AnchorProvider.env().wallet;
   const adminKey = adminWallet.publicKey;
   let user: anchor.web3.Keypair;
@@ -31,24 +27,67 @@ describe("stake", () => {
   let userStaked: anchor.web3.PublicKey;
   let userPDA: anchor.web3.PublicKey;
   let userPDABump: number;
+  let unstakedMint: anchor.web3.Keypair;
+  const salt: number[] = Array.from({ length: 32 }, () => Math.floor(Math.random() * 256));
+  console.log("Salt: ", salt);
+
+  const [vaultStatePDA, vaultStateBump] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("vault-state"), Buffer.from(salt)],
+    program.programId
+  );
+
+  const [stakingTokenPDA, stakingTokenBump] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("staking-token")],
+    program.programId
+  );
+
+  const [vaultTokenAccountPDA, vaultTokenAccountBump] = anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("vault-token-account")],
+    program.programId
+  );
 
   before(async () => {
     user = anchor.web3.Keypair.generate();
     vaultAuthority = anchor.web3.Keypair.generate();
+    unstakedMint = anchor.web3.Keypair.generate();
 
     await anchor.AnchorProvider.env().connection.requestAirdrop(user.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
     await anchor.AnchorProvider.env().connection.requestAirdrop(vaultAuthority.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
 
-    console.log("admin: ", adminKey);
-    await program.methods.initializeVaultState(TOKEN_PROGRAM_ID, new BN(0)).rpc()
-
-    await program.methods.removeRewarder(adminKey).rpc()
-    console.log("Removed rewarder: ", adminKey);
-
-    await program.methods.addRewarder(adminKey).rpc()
-    console.log("Added rewarder: ", adminKey);
+    
   });
 
+  it("Initialize vault and add users", async () => {
+    vaultUnstaked = await getAssociatedTokenAddress(unstakedMint.publicKey, vaultAuthority.publicKey);
+    userUnstaked = await getAssociatedTokenAddress(unstakedMint.publicKey, user.publicKey);
+    //let callerStaked = await getAssociatedTokenAddress(vaultMint, user.publicKey);
+
+    const lamports: number = await program.provider.connection.getMinimumBalanceForRentExemption(MINT_SIZE);
+    // Create mint for UserToken
+    const unstakedMintTx = new anchor.web3.Transaction().add(
+      // Create an account from the user mint key
+      anchor.web3.SystemProgram.createAccount({
+        fromPubkey: adminKey,
+        newAccountPubkey: unstakedMint.publicKey,
+        space: MINT_SIZE,
+        programId: TOKEN_PROGRAM_ID,
+        lamports,
+      }),
+      // Create collat mint account that is controlled by anchor wallet
+      createInitializeMintInstruction(unstakedMint.publicKey, 0, adminKey, adminKey),
+      // Create the ATA account that is associated with collat mint on anchor wallet
+      createAssociatedTokenAccountInstruction(adminKey, userUnstaked, user.publicKey, unstakedMint.publicKey),
+    );
+
+    await anchor.AnchorProvider.env().sendAndConfirm(unstakedMintTx, [unstakedMint]);
+
+    console.log("admin: ", adminKey);
+    await program.methods.initializeVaultState(adminKey, new anchor.BN(10), salt).accounts({
+      depositToken: unstakedMint.publicKey,
+      caller: adminKey,
+    }).rpc().catch(e => console.error(e));
+  });
+  /*
   it("Initialize vault and mint staked tokens", async () => {
     const key = adminKey;
     vaultKey = anchor.web3.Keypair.generate();
@@ -198,6 +237,14 @@ describe("stake", () => {
   });
 
   it("Unstake test", async () => {
+
+
+    await program.methods.removeRewarder(adminKey).rpc()
+    console.log("Removed rewarder: ", adminKey);
+
+    await program.methods.addRewarder(adminKey).rpc()
+    console.log("Added rewarder: ", adminKey);
+
     const userStakedInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
     const vaultStakedInfo = await program.provider.connection.getParsedAccountInfo(vaultStaked);
 

@@ -33,6 +33,8 @@ pub struct VaultState {
 
 #[program]
 pub mod stake {
+    use std::vec;
+
     use anchor_spl::token::{Burn, MintTo};
 
     use super::*;
@@ -41,25 +43,29 @@ pub mod stake {
         ctx: Context<InitializeVaultState>,
         admin: Pubkey,
         max_cooldown: u64,
+        salt: [u8; 32]
     ) -> Result<()> {
-        let vault_state = &mut ctx.accounts.vault_state;
-
-        vault_state.max_cooldown = max_cooldown;
-        vault_state.cooldown = max_cooldown;
-        vault_state.deposit_token = ctx.accounts.deposit_token.key();
-        vault_state.admin = admin;
-        vault_state.rewarders = vec![admin];
-        vault_state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
-        vault_state.bump = ctx.bumps.vault_state;
-
+        ctx.accounts.vault_state.max_cooldown = max_cooldown;
+        ctx.accounts.vault_state.cooldown = max_cooldown;
+        ctx.accounts.vault_state.min_shares = 0; // TODO
+        ctx.accounts.vault_state.total_deposits = 0;
+        ctx.accounts.vault_state.reward_per_deposit = 0;
+        ctx.accounts.vault_state.deposit_token = ctx.accounts.deposit_token.key();
+        ctx.accounts.vault_state.admin = admin;
+        ctx.accounts.vault_state.rewarders = vec![admin];
+        ctx.accounts.vault_state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
+        ctx.accounts.vault_state.bump = ctx.bumps.vault_state;
+        ctx.accounts.vault_state.deposit_token = ctx.accounts.deposit_token.key();
+        ctx.accounts.vault_state.rewarders = vec![];
+        ctx.accounts.vault_state.blacklist = vec![];
         Ok(())
     }
 
-    pub fn initialize_user_account(_ctx: Context<InitializeUserAccount>) -> Result<()> {
+    pub fn initialize_user_account(_ctx: Context<InitializeUserAccount>, salt: [u8; 32]) -> Result<()> {
         Ok(())
     }
 
-    pub fn set_cooldown_duration(ctx: Context<SetCooldownDuration>, duration: u64) -> Result<()> {
+    pub fn set_cooldown_duration(ctx: Context<SetCooldownDuration>, duration: u64, salt: [u8; 32]) -> Result<()> {
         let state = &mut ctx.accounts.vault_state;
 
         if ctx.accounts.caller.key() != state.admin {
@@ -72,7 +78,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn stake(ctx: Context<Stake>, amt: u64) -> Result<()> {
+    pub fn stake(ctx: Context<Stake>, amt: u64, salt: [u8; 32]) -> Result<()> {
         distribute(&mut ctx.accounts.vault_state)?;
         let auth = ctx.accounts.vault_state.to_account_info();
         let state = &mut ctx.accounts.vault_state;
@@ -131,7 +137,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn unstake(ctx: Context<Unstake>) -> Result<()> {
+    pub fn unstake(ctx: Context<Unstake>, salt: [u8; 32]) -> Result<()> {
         distribute(&mut ctx.accounts.vault_state)?;
 
         // Withdraws the assets that have cooled down and all yield generated
@@ -213,7 +219,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn add_rewarder(ctx: Context<Rewarders>, rewarder: Pubkey) -> Result<()> {
+    pub fn add_rewarder(ctx: Context<Rewarders>, rewarder: Pubkey, salt: [u8; 32]) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(StakeError::NotAdmin.into());
         }
@@ -234,7 +240,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn remove_rewarder(ctx: Context<Rewarders>, rewarder: Pubkey) -> Result<()> {
+    pub fn remove_rewarder(ctx: Context<Rewarders>, rewarder: Pubkey, salt: [u8; 32]) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(StakeError::NotAdmin.into());
         }
@@ -255,7 +261,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn reward(ctx: Context<Reward>, amt: u64) -> Result<()> {
+    pub fn reward(ctx: Context<Reward>, amt: u64, salt: [u8; 32]) -> Result<()> {
         distribute(&mut ctx.accounts.vault_state)?;
 
         let state = &mut ctx.accounts.vault_state;
@@ -310,21 +316,18 @@ pub fn distribute(state: &mut VaultState) -> Result<u64> {
 }
 
 #[derive(Accounts)]
-#[instruction(admin: Pubkey, max_cooldown: u64)]
+#[instruction(admin: Pubkey, max_cooldown: u64, salt: Pubkey)]
 pub struct InitializeVaultState<'info> {
-    pub token_program: Program<'info, Token>,
-    pub system_program: Program<'info, System>,
-
     /// The vault state for this deposit token and admin
     #[account(
         init, 
         payer = caller, 
         // todo check space
         space = 1024, 
-        seeds = [VAULT_STATE_SEED, admin.as_ref(), deposit_token.key().as_ref()], 
+        seeds = [VAULT_STATE_SEED, salt.as_ref()], 
         bump
     )]
-    pub vault_state: Account<'info, VaultState>,
+    pub vault_state: Box<Account<'info, VaultState>>,
 
     #[account(
         init,
@@ -334,7 +337,7 @@ pub struct InitializeVaultState<'info> {
         mint::authority = vault_state,
         bump
     )]
-    pub staking_token: Account<'info, Mint>,
+    pub staking_token: Box<Account<'info, Mint>>,
 
     /// The deposit token ATA for this vault and admin
     #[account(
@@ -345,18 +348,20 @@ pub struct InitializeVaultState<'info> {
         token::authority = vault_state,
         bump
     )]
-    pub vault_token_account: Account<'info, TokenAccount>,
-    pub deposit_token: Account<'info, Mint>,
+    pub vault_token_account: Box<Account<'info, TokenAccount>>,
+    #[account(mut)]
+    pub deposit_token: Box<Account<'info, Mint>>,
     #[account(mut)]
     pub caller: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
+#[instruction(salt: [u8; 32])]
 pub struct InitializeUserAccount<'info> {
-    pub system_program: Program<'info, System>,
-
     #[account(
-        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
+        seeds = [VAULT_STATE_SEED, &salt[..]], 
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
@@ -365,22 +370,82 @@ pub struct InitializeUserAccount<'info> {
         init, 
         payer = user, 
         space = 8 + 8 + 32 + (8 * 10), 
-        seeds = [USER_DATA_SEED, user.key().as_ref(), 
-        vault_state.key().as_ref()], 
+        seeds = [USER_DATA_SEED, user.key().as_ref(), vault_state.key().as_ref()], 
         bump
     )]
     pub user_data: Account<'info, UserPDA>,
 
     #[account(mut)]
     pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
+pub struct MintToken<'info> {
+    pub token_program: Program<'info, Token>,
+
+    #[account(
+        mut,
+        seeds = [STAKING_TOKEN_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.key().as_ref()],
+        bump
+    )]
+    pub staking_token: Account<'info, Mint>,
+
+    /// Warning!: We dont check if the recipient has the same authority as the caller
+    #[account(
+        mut,
+        token::mint = staking_token,
+    )]
+    pub recipient: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()],
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+}
+
+#[derive(Accounts)]
+pub struct Reward<'info> {
+    pub token_program: Program<'info, Token>,
+
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+
+    /// The callers deposit token account
+    #[account(
+        mut,
+        token::mint = vault_state.deposit_token,
+        token::authority = caller,
+    )]
+    pub caller_token_account: Account<'info, TokenAccount>,
+
+    /// The vaults ATA for the deposit token
+    #[account(
+        mut,
+        seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
+        bump
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub caller: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(salt: [u8; 32])]
 pub struct Stake<'info> {
     pub token_program: Program<'info, Token>,
     #[account(
         mut,
-        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
+        seeds = [VAULT_STATE_SEED, &salt[..]],
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
@@ -422,12 +487,13 @@ pub struct Stake<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(salt: [u8; 32])]
 pub struct Unstake<'info> {
     pub token_program: Program<'info, Token>,
 
     #[account(
         mut,
-        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
+        seeds = [VAULT_STATE_SEED, &salt[..]],
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
@@ -506,10 +572,11 @@ pub struct Reward<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(salt: [u8; 32])]
 pub struct SetCooldownDuration<'info> {
     #[account(
         mut,
-        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
+        seeds = [VAULT_STATE_SEED, &salt[..]],
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
@@ -518,10 +585,11 @@ pub struct SetCooldownDuration<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(salt: [u8; 32])]
 pub struct Rewarders<'info> {
     #[account(
         mut,
-        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()],
+        seeds = [VAULT_STATE_SEED, &salt[..]],
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
