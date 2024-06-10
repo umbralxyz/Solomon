@@ -408,36 +408,6 @@ pub struct MintToken<'info> {
     pub vault_state: Account<'info, VaultState>,
 }
 
-#[derive(Accounts)]
-pub struct Reward<'info> {
-    pub token_program: Program<'info, Token>,
-
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-
-    /// The callers deposit token account
-    #[account(
-        mut,
-        token::mint = vault_state.deposit_token,
-        token::authority = caller,
-    )]
-    pub caller_token_account: Account<'info, TokenAccount>,
-
-    /// The vaults ATA for the deposit token
-    #[account(
-        mut,
-        seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
-        bump
-    )]
-    pub vault_token_account: Account<'info, TokenAccount>,
-
-    #[account(mut)]
-    pub caller: Signer<'info>,
-}
 
 #[derive(Accounts)]
 #[instruction(salt: [u8; 32])]
