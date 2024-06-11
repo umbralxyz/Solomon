@@ -32,7 +32,7 @@ describe("stake", () => {
   //console.log("Salt: ", salt);
 
   const [vaultStatePDA, vaultStateBump] = anchor.web3.PublicKey.findProgramAddressSync(
-    [Buffer.from("vault-state"), Buffer.from(salt)],
+    [Buffer.from("vault-state")],//, Buffer.from(salt)],
     program.programId
   );
 
@@ -96,6 +96,11 @@ describe("stake", () => {
       caller: adminKey,
     }).rpc().catch(e => console.error(e));
 
+    await program.methods.initializeProgramAccounts().accounts({
+      depositToken: unstakedMint.publicKey,
+      caller: adminKey,
+    }).rpc().catch(e => console.error(e));
+
     // Add user
     await program.methods.initializeUserAccount().accounts({
       user: user.publicKey,
@@ -105,7 +110,7 @@ describe("stake", () => {
     const [stakingTokenPDA, stakingTokenBump] = anchor.web3.PublicKey.findProgramAddressSync(
       [
         Buffer.from("staking-token"),
-        //adminKey.toBuffer(), 
+        vaultStatePDA.toBuffer(), 
         //unstakedMint.publicKey.toBuffer()
       ],
       program.programId
@@ -167,6 +172,7 @@ describe("stake", () => {
     console.log("Rewarded tokens: ", reward);
   });
 
+  
   it("Unstake test", async () => {
     let callerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
     const unstakedBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
@@ -176,7 +182,7 @@ describe("stake", () => {
     await program.methods.unstake().accounts({
       userDepositTokenAccount: userUnstaked,
       userStakingTokenAccount: userStaked,
-      user: user.publicKey,
+      user: user.publicKey
     }).signers([user]).rpc().catch(e => console.error(e));
 
     callerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
@@ -189,4 +195,5 @@ describe("stake", () => {
     console.log("User unstaked tokens after unstaking: ", unstakedAfter);
     console.log("User staked tokens after unstaking: ", stakedAfter);
   });
+  
 });

@@ -60,6 +60,10 @@ pub mod stake {
         Ok(())
     }
 
+    pub fn initialize_program_accounts(_ctx: Context<InitializeProgramAccounts>) -> Result<()> {
+        Ok(())
+    }
+
     pub fn initialize_user_account(_ctx: Context<InitializeUserAccount>) -> Result<()> {
         Ok(())
     }
@@ -81,8 +85,9 @@ pub mod stake {
         distribute(&mut ctx.accounts.vault_state)?;
         let auth = ctx.accounts.vault_state.to_account_info();
         let state = &mut ctx.accounts.vault_state;
+        let state_key = state.key();
         let user_data = &mut ctx.accounts.user_data;
-
+        
         if state.blacklist.contains(&ctx.accounts.user.key()) {
             return Err(StakeError::Blacklisted.into());
         }
@@ -109,7 +114,7 @@ pub mod stake {
 
         let seeds: &[&[u8]] = &[
             VAULT_STATE_SEED,
-            //state.admin.as_ref(),
+            //state_key.as_ref(),
             //state.deposit_token.as_ref(),
             &[state.bump],
         ];
@@ -143,6 +148,7 @@ pub mod stake {
         // Withdraws the assets that have cooled down and all yield generated
         let auth = ctx.accounts.vault_state.to_account_info();
         let state = &mut ctx.accounts.vault_state;
+        let state_key = state.key();
 
         let time = Clock::get()?.unix_timestamp as u64;
 
@@ -181,7 +187,7 @@ pub mod stake {
 
         let seeds: &[&[u8]] = &[
             VAULT_STATE_SEED,
-            //state.admin.as_ref(),
+            //state_key.as_ref(),
             //state.deposit_token.as_ref(),
             &[state.bump],
         ];
@@ -321,10 +327,27 @@ pub struct InitializeVaultState<'info> {
     )]
     pub vault_state: Box<Account<'info, VaultState>>,
 
+    #[account(mut)]
+    pub deposit_token: Box<Account<'info, Mint>>,
+    #[account(mut)]
+    pub caller: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeProgramAccounts<'info> {
+    /// The vault state for this deposit token and admin
+    #[account(
+        seeds = [VAULT_STATE_SEED], 
+        bump
+    )]
+    pub vault_state: Box<Account<'info, VaultState>>,
+
     #[account(
         init,
         payer = caller,
-        seeds = [STAKING_TOKEN_SEED],//, admin.as_ref(), deposit_token.key().as_ref()],
+        seeds = [STAKING_TOKEN_SEED, vault_state.key().as_ref()],
         mint::decimals = 9,
         mint::authority = vault_state,
         bump
@@ -335,7 +358,7 @@ pub struct InitializeVaultState<'info> {
     #[account(
         init, 
         payer = caller, 
-        seeds = [VAULT_TOKEN_ACCOUNT_SEED],//, admin.as_ref(), deposit_token.key().as_ref()],
+        seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.key().as_ref()],
         token::mint = deposit_token,
         token::authority = vault_state,
         bump
@@ -381,7 +404,7 @@ pub struct Stake<'info> {
     pub vault_state: Account<'info, VaultState>,
     #[account(
         mut,
-        seeds = [STAKING_TOKEN_SEED],//, vault_state.admin.as_ref()],//, vault_state.deposit_token.as_ref()],
+        seeds = [STAKING_TOKEN_SEED, vault_state.key().as_ref()],
         bump
     )]
     pub staking_token: Account<'info, Mint>,
@@ -408,7 +431,7 @@ pub struct Stake<'info> {
     /// The vaults ATA for the deposit token
     #[account(
         mut,
-        seeds = [VAULT_TOKEN_ACCOUNT_SEED],//, vault_state.admin.as_ref()],//, vault_state.deposit_token.as_ref()],
+        seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.key().as_ref()],
         bump
     )]
     pub vault_token_account: Account<'info, TokenAccount>,
@@ -430,7 +453,7 @@ pub struct Unstake<'info> {
 
     #[account(
         mut,
-        seeds = [STAKING_TOKEN_SEED],//, vault_state.admin.as_ref(), vault_state.deposit_token.key().as_ref()],
+        seeds = [STAKING_TOKEN_SEED, vault_state.key().as_ref()],
         bump
     )]
     pub staking_token: Account<'info, Mint>,
@@ -460,7 +483,7 @@ pub struct Unstake<'info> {
     /// The vaults ATA for the deposit token
     #[account(
         mut,
-        seeds = [VAULT_TOKEN_ACCOUNT_SEED],//, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()],
+        seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.key().as_ref()],
         bump
     )]
     pub vault_token_account: Account<'info, TokenAccount>,
@@ -490,7 +513,7 @@ pub struct Reward<'info> {
     /// The vaults ATA for the deposit token
     #[account(
         mut,
-        seeds = [VAULT_TOKEN_ACCOUNT_SEED],//, vault_state.admin.as_ref(), vault_state.deposit_token.as_ref()], 
+        seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.key().as_ref()],
         bump
     )]
     pub vault_token_account: Account<'info, TokenAccount>,
