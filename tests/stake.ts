@@ -15,29 +15,17 @@ import { BN } from "bn.js";
 describe("stake", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
   const program = anchor.workspace.Stake as Program<Stake>;
-  let vaultKey = anchor.web3.Keypair.generate();
-  let associatedTokenAccount = undefined;
   const adminWallet = anchor.AnchorProvider.env().wallet;
   const adminKey = adminWallet.publicKey;
   let user: anchor.web3.Keypair;
   let vaultAuthority: anchor.web3.Keypair;
   let vaultUnstaked: anchor.web3.PublicKey;
-  let vaultStaked: anchor.web3.PublicKey;
   let userUnstaked: anchor.web3.PublicKey;
   let userStaked: anchor.web3.PublicKey;
-  let userPDA: anchor.web3.PublicKey;
-  let userPDABump: number;
   let unstakedMint: anchor.web3.Keypair;
   const salt: number[] = Array.from({ length: 8 }, () => Math.floor(Math.random() * 256));
-  //console.log("Salt: ", salt);
-
   const [vaultStatePDA, vaultStateBump] = anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("vault-state"), Buffer.from(salt)],
-    program.programId
-  );
-
-  const [vaultTokenAccountPDA, vaultTokenAccountBump] = anchor.web3.PublicKey.findProgramAddressSync(
-    [Buffer.from("vault-token-account")],
     program.programId
   );
 
@@ -49,17 +37,14 @@ describe("stake", () => {
 
     await anchor.AnchorProvider.env().connection.requestAirdrop(user.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
     await anchor.AnchorProvider.env().connection.requestAirdrop(vaultAuthority.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
-
-    
   });
 
   it("Initialize vault and add user", async () => {
     vaultUnstaked = await getAssociatedTokenAddress(unstakedMint.publicKey, vaultAuthority.publicKey);
     userUnstaked = await getAssociatedTokenAddress(unstakedMint.publicKey, user.publicKey);
-    //let callerStaked = await getAssociatedTokenAddress(vaultMint, user.publicKey);
 
     const lamports: number = await program.provider.connection.getMinimumBalanceForRentExemption(MINT_SIZE);
-    // Create mint for UserToken
+    // Create mint for UserToken (unstaked token)
     const unstakedMintTx = new anchor.web3.Transaction().add(
       // Create an account from the user mint key
       anchor.web3.SystemProgram.createAccount({
@@ -69,9 +54,9 @@ describe("stake", () => {
         programId: TOKEN_PROGRAM_ID,
         lamports,
       }),
-      // Create collat mint account that is controlled by anchor wallet
+      // Create unstaked mint account that is controlled by anchor wallet
       createInitializeMintInstruction(unstakedMint.publicKey, 0, adminKey, adminKey),
-      // Create the ATA account that is associated with collat mint on anchor wallet
+      // Create the ATA account that is associated with unstaked mint on anchor wallet
       createAssociatedTokenAccountInstruction(adminKey, userUnstaked, user.publicKey, unstakedMint.publicKey),
     );
 
@@ -79,6 +64,7 @@ describe("stake", () => {
 
     const mintAmount = 10000000;
 
+    // Mint unstaked tokens to user
     const collatMintTx = new anchor.web3.Transaction().add(
       createMintToInstruction(unstakedMint.publicKey, userUnstaked, adminKey, mintAmount),
     );
@@ -90,7 +76,7 @@ describe("stake", () => {
 
     console.log("admin: ", adminKey);
 
-    // Initialize staking vault
+    // Initialize staking vault and token accounts
     await program.methods.initializeVaultState(adminKey, new anchor.BN(0), salt).accounts({
       depositToken: unstakedMint.publicKey,
       caller: adminKey,
@@ -108,11 +94,7 @@ describe("stake", () => {
 
     // Initialize user staked account
     const [stakingTokenPDA, stakingTokenBump] = anchor.web3.PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("staking-token"),
-        vaultStatePDA.toBuffer(), 
-        //unstakedMint.publicKey.toBuffer()
-      ],
+      [Buffer.from("staking-token"), vaultStatePDA.toBuffer()],
       program.programId
     );
 
@@ -133,17 +115,20 @@ describe("stake", () => {
   it("Stake test", async () => {
     const stake = new anchor.BN(1000000);
 
+    // Get balances of user before
     let callerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
     const unstakedBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
     callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
     const stakedBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
 
+    // Stake as user
     await program.methods.stake(stake, salt).accounts({
       userDepositTokenAccount: userUnstaked,
       userStakingTokenAccount: userStaked,
       user: user.publicKey,
     }).signers([user]).rpc().catch(e => console.error(e));
 
+    // Get balances of user after
     callerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
     const unstakedAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
     callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
@@ -158,12 +143,14 @@ describe("stake", () => {
   it("Reward test", async () => {
     const reward = new anchor.BN(1000000);
 
+    // Add rewarder
     await program.methods.addRewarder(user.publicKey, salt).accounts({
       caller: adminKey
     }).rpc().catch(e => console.error(e));
 
     console.log("Added rewarder: ", user.publicKey);
 
+    // Reward unstaked tokens to vault as user
     await program.methods.reward(reward, salt).accounts({
       callerTokenAccount: userUnstaked,
       caller: user.publicKey,
@@ -174,17 +161,21 @@ describe("stake", () => {
 
   
   it("Unstake test", async () => {
+    // Get balances of user before
     let callerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
     const unstakedBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
     callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
     const stakedBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
 
+    // Unstake as user
     await program.methods.unstake(salt).accounts({
       userDepositTokenAccount: userUnstaked,
       userStakingTokenAccount: userStaked,
       user: user.publicKey
     }).signers([user]).rpc().catch(e => console.error(e));
 
+    // Get balances of user after (no rewards generated because insufficent time has passed)
+    // Cooldown for tests is set to 0 so all deposits can be withdrawn immediately
     callerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
     const unstakedAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
     callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);

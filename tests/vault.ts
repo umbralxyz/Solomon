@@ -39,12 +39,12 @@ describe("vault", () => {
   let vaultAuthority: anchor.web3.Keypair;
   let vaultCollat: anchor.web3.PublicKey;
   let mintTokenVault: anchor.web3.PublicKey;
-  let callerCollat: anchor.web3.PublicKey;
-  let callerToken: anchor.web3.PublicKey;
+  let userCollat: anchor.web3.PublicKey;
+  let userVaultToken: anchor.web3.PublicKey;
 
 
   before(async () => {
-    // Initialize any necessary setup before tests
+    // Initialize keypairs
     userTokenMintKey = anchor.web3.Keypair.generate();
     depositer = anchor.web3.Keypair.generate();
     vaultAuthority = anchor.web3.Keypair.generate();
@@ -83,13 +83,12 @@ describe("vault", () => {
   });
   
   it("Initialize Mint and mint tokens", async () => {
-    // Get anchor's wallet's public key
     const key = adminKey;
 
     // Get the amount of SOL needed to pay rent for our Token Mint
     const lamports: number = await program.provider.connection.getMinimumBalanceForRentExemption(MINT_SIZE);
 
-    // Get the ATA for a token and the account that will own the ATA
+    // Get the address for admin's VaultToken ATA and create
     associatedTokenAccount = await getAssociatedTokenAddress(vaultMint, key);
 
     console.log("Vault mint address: ", vaultMint);
@@ -97,7 +96,7 @@ describe("vault", () => {
       createAssociatedTokenAccountInstruction(key, associatedTokenAccount, key, vaultMint),
     );
 
-    const res = await anchor.AnchorProvider.env().sendAndConfirm(ataTx, []);
+    await anchor.AnchorProvider.env().sendAndConfirm(ataTx, []);
 
     console.log(
       await program.provider.connection.getParsedAccountInfo(vaultMint)
@@ -106,8 +105,8 @@ describe("vault", () => {
     const mintAmount = 1000000000000000;
 
     vaultCollat = await getAssociatedTokenAddress(userTokenMintKey.publicKey, vaultAuthority.publicKey);
-    callerCollat = await getAssociatedTokenAddress(userTokenMintKey.publicKey, depositer.publicKey);
-    callerToken = await getAssociatedTokenAddress(vaultMint, depositer.publicKey);
+    userCollat = await getAssociatedTokenAddress(userTokenMintKey.publicKey, depositer.publicKey);
+    userVaultToken = await getAssociatedTokenAddress(vaultMint, depositer.publicKey);
 
     // Create mint for UserToken
     const userTokenMintTx = new anchor.web3.Transaction().add(
@@ -122,31 +121,31 @@ describe("vault", () => {
       // Create collat mint account that is controlled by anchor wallet
       createInitializeMintInstruction(userTokenMintKey.publicKey, 0, key, key),
       // Create the ATA account that is associated with collat mint on anchor wallet
-      createAssociatedTokenAccountInstruction(key, callerCollat, depositer.publicKey, userTokenMintKey.publicKey),
+      createAssociatedTokenAccountInstruction(key, userCollat, depositer.publicKey, userTokenMintKey.publicKey),
     );
 
     await anchor.AnchorProvider.env().sendAndConfirm(userTokenMintTx, [userTokenMintKey]);
 
-    //console.log("Account: ", userTokenMintTx);
     console.log("Collat Mint key: ", userTokenMintKey.publicKey);
     
     const createVaultsTx = new anchor.web3.Transaction().add(
       createAssociatedTokenAccountInstruction(adminKey, vaultCollat, vaultAuthority.publicKey, userTokenMintKey.publicKey),
-      createAssociatedTokenAccountInstruction(adminKey, callerToken, depositer.publicKey, vaultMint)
+      createAssociatedTokenAccountInstruction(adminKey, userVaultToken, depositer.publicKey, vaultMint)
     );
 
+    await anchor.AnchorProvider.env().sendAndConfirm(createVaultsTx, []);
+
+    // Mint UserTokens (collat) to depositer
     const collatMintTx = new anchor.web3.Transaction().add(
-      createMintToInstruction(userTokenMintKey.publicKey, callerCollat, adminKey, mintAmount),
+      createMintToInstruction(userTokenMintKey.publicKey, userCollat, adminKey, mintAmount),
     );
 
     await anchor.AnchorProvider.env().sendAndConfirm(collatMintTx, []);
 
-    await anchor.AnchorProvider.env().connection.requestAirdrop(callerCollat, 2 * anchor.web3.LAMPORTS_PER_SOL);
-
-    await anchor.AnchorProvider.env().sendAndConfirm(createVaultsTx, []);
+    await anchor.AnchorProvider.env().connection.requestAirdrop(userCollat, 2 * anchor.web3.LAMPORTS_PER_SOL);
 
     // Get minted token amount on the ATA for depositer
-    const depositerInfo = await program.provider.connection.getParsedAccountInfo(callerCollat);
+    const depositerInfo = await program.provider.connection.getParsedAccountInfo(userCollat);
     const collatMinted = depositerInfo.value.data.parsed.info.tokenAmount.amount;
     console.log("Collat minted: ", collatMinted);
   });
@@ -167,7 +166,7 @@ describe("vault", () => {
     console.log("Add asset signature: ", addAssetTx);
     console.log("Asset added: ", assetKey);
 
-    // Whitelist depositer
+    // Whitelist depositer as minter and redeemer
     await program.methods.whitelistMinter(depositer.publicKey).accounts({
       vaultState: vaultStatePDA,
     }).rpc()
@@ -179,46 +178,51 @@ describe("vault", () => {
     console.log("Whitelisted redeemer: ", adminKey);
 
     const deposit = new anchor.BN(100000000000000);
-    const redeem = new anchor.BN(50);
+    const redeem = new anchor.BN(1000000);
     
-    console.log("Caller collat mint: ", callerCollat)
-    let callerInfo = await program.provider.connection.getParsedAccountInfo(callerToken);
+    console.log("Caller collat mint: ", userCollat)
+    // Get user balances before deposit
+    let callerInfo = await program.provider.connection.getParsedAccountInfo(userVaultToken);
     const vaultTokensBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
-    callerInfo = await program.provider.connection.getParsedAccountInfo(callerCollat);
+    callerInfo = await program.provider.connection.getParsedAccountInfo(userCollat);
     const collatTokensBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
     
-    // Deposit
+    // Deposit as user
     const depositTx = await program.methods.deposit(deposit).accounts({
-      callerCollateral: callerCollat,
-      callerVaultToken: callerToken,
+      callerCollateral: userCollat,
+      callerVaultToken: userVaultToken,
       minter: depositer.publicKey,
       collateralTokenMint: userTokenMintKey.publicKey,
       vaultState: vaultStatePDA,
     }).signers([depositer]).rpc().catch(e => console.error(e));
-
-    console.log("Deposit signature: ", depositTx);
-
-    callerInfo = await program.provider.connection.getParsedAccountInfo(callerToken);
-    const vaultTokensAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
-    callerInfo = await program.provider.connection.getParsedAccountInfo(callerCollat);
-    const collatTokensAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
     
 
-    console.log("Caller vault tokens before deposit: ", vaultTokensBefore);
-    console.log("Caller collat tokens before deposit: ", collatTokensBefore);
-    console.log("Caller vault tokens after deposit: ", vaultTokensAfter);
-    console.log("Caller collat tokens after deposit: ", collatTokensAfter);
+    // Get user balances after deposit
+    callerInfo = await program.provider.connection.getParsedAccountInfo(userVaultToken);
+    const vaultTokensAfterDeposit = callerInfo.value.data.parsed.info.tokenAmount.amount;
+    callerInfo = await program.provider.connection.getParsedAccountInfo(userCollat);
+    const collatTokensAfterDeposit = callerInfo.value.data.parsed.info.tokenAmount.amount;
 
-    // Redeem
+    // Redeem as user
     const redeemTx = await program.methods.redeem(redeem).accounts({
-      callerCollateral: callerCollat,
-      callerVaultToken: callerToken,
+      callerCollateral: userCollat,
+      callerVaultToken: userVaultToken,
       redeemer: depositer.publicKey,
       collateralTokenMint: userTokenMintKey.publicKey,
     }).signers([depositer]).rpc().catch(e => console.error(e));
 
-    console.log("Redemption signature: ", redeemTx);
-
+    // Get user balances after redemption
+    callerInfo = await program.provider.connection.getParsedAccountInfo(userVaultToken);
+    const vaultTokensAfterRedemption = callerInfo.value.data.parsed.info.tokenAmount.amount;
+    callerInfo = await program.provider.connection.getParsedAccountInfo(userCollat);
+    const collatTokensAfterRedemption = callerInfo.value.data.parsed.info.tokenAmount.amount;
+    
+    console.log("User vault tokens before deposit: ", vaultTokensBefore);
+    console.log("User collat tokens before deposit: ", collatTokensBefore);
+    console.log("User vault tokens after deposit: ", vaultTokensAfterDeposit);
+    console.log("User collat tokens after deposit: ", collatTokensAfterDeposit);
+    console.log("User vault tokens after redemption: ", vaultTokensAfterRedemption);
+    console.log("User collat tokens after redemption: ", collatTokensAfterRedemption);
   });
   
   it("Add manager and withdraw deposited collateral", async () => {
@@ -232,7 +236,7 @@ describe("vault", () => {
 
     await anchor.AnchorProvider.env().sendAndConfirm(ataTx, []);
 
-    const amt = new anchor.BN(9);
+    const amt = new anchor.BN(40000);
     
     // Add manager
     await program.methods.addManager(withdrawerCollat).accounts({
@@ -248,9 +252,6 @@ describe("vault", () => {
       collatMint: userTokenMintKey.publicKey,
       vaultState: vaultStatePDA,
     }).signers([]).rpc();
-
-    console.log("Withdraw signature: ", withdrawTx);
-
     
     callerInfo = await program.provider.connection.getParsedAccountInfo(withdrawerCollat);
     const withdrawerAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;

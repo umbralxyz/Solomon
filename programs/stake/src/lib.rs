@@ -47,7 +47,7 @@ pub mod stake {
     ) -> Result<()> {
         ctx.accounts.vault_state.max_cooldown = max_cooldown;
         ctx.accounts.vault_state.cooldown = max_cooldown;
-        ctx.accounts.vault_state.min_shares = 0; // TODO
+        ctx.accounts.vault_state.min_shares = 1; // TODO determine amount to put here
         ctx.accounts.vault_state.total_deposits = 0;
         ctx.accounts.vault_state.reward_per_deposit = 0;
         ctx.accounts.vault_state.deposit_token = ctx.accounts.deposit_token.key();
@@ -79,6 +79,11 @@ pub mod stake {
         require!(duration <= state.max_cooldown, StakeError::TooSoon);
         state.cooldown = duration;
 
+        emit!(SetCooldownEvent{
+            who: ctx.accounts.caller.key(),
+            new_cd: duration,
+        });
+
         Ok(())
     }
 
@@ -87,6 +92,10 @@ pub mod stake {
         let auth = ctx.accounts.vault_state.to_account_info();
         let state = &mut ctx.accounts.vault_state;
         let user_data = &mut ctx.accounts.user_data;
+
+        if ctx.accounts.vault_token_account.amount < state.min_shares {
+            //return Err(StakeError::MinSharesViolation.into()); TODO uncomment after min_shares calibration
+        }
         
         if state.blacklist.contains(&ctx.accounts.user.key()) {
             return Err(StakeError::Blacklisted.into());
@@ -115,7 +124,6 @@ pub mod stake {
         let seeds: &[&[u8]] = &[
             VAULT_STATE_SEED,
             salt.as_ref(),
-            //state.deposit_token.as_ref(),
             &[state.bump],
         ];
         let seeds = &[seeds][..];
@@ -187,7 +195,6 @@ pub mod stake {
         let seeds: &[&[u8]] = &[
             VAULT_STATE_SEED,
             salt.as_ref(),
-            //state.deposit_token.as_ref(),
             &[state.bump],
         ];
         let seeds = &[seeds][..];
@@ -290,7 +297,7 @@ pub mod stake {
 }
 
 pub fn distribute(state: &mut VaultState) -> Result<u64> {
-    // called before the first reward, so the clock will not be 0
+    // Called before the first reward, so the clock will not be 0
     if state.last_distribution_amt == 0 {
         state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
         return Ok(0);
@@ -302,8 +309,8 @@ pub fn distribute(state: &mut VaultState) -> Result<u64> {
     let scalar = 1000000000 as u64; // 10^9
     let mut percentage = scalar;
 
-    // get the percentage of 8 hours passed since last distribution
-    // if greater than 8 hours, percentage = 100%
+    // Get the percentage of 8 hours passed since last distribution
+    // If greater than 8 hours, percentage = 100%
     if time_passed < (8 * 60 * 60) {
         percentage = (scalar * time_passed) / (8 * 60 * 60);
     }
@@ -567,6 +574,12 @@ pub struct UserPDA {
 }
 
 #[event]
+pub struct SetCooldownEvent {
+    who: Pubkey,
+    new_cd: u64,
+}
+
+#[event]
 pub struct StakeEvent {
     who: Pubkey,
     amt: u64,
@@ -614,4 +627,6 @@ pub enum StakeError {
     UserNotFound,
     #[msg("That token is not available for staking")]
     WrongToken,
+    #[msg("The vault is below the minimum shares required for staking")]
+    MinSharesViolation,
 }

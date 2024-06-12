@@ -55,7 +55,7 @@ pub mod vault {
     // The redeem rate is (asset units / stable units) [how many asset coins a depositer will get per stable coin]
     pub fn add_asset(
         ctx: Context<AddAsset>,
-        _asset: Pubkey,
+        asset: Pubkey,
         deposit_rate: u64,
         redeem_rate: u64,
     ) -> Result<()> {
@@ -66,13 +66,18 @@ pub mod vault {
         ctx.accounts.exchange_rate.deposit_rate = deposit_rate;
         ctx.accounts.exchange_rate.redeem_rate = redeem_rate;
 
+        emit!(AssetAddedEvent{
+            who: ctx.accounts.authority.key(),
+            asset: asset,
+        });
+
         Ok(())
     }
 
     pub fn deposit(ctx: Context<Deposit>, collat: u64) -> Result<()> {
         let state = &ctx.accounts.vault_state;
         let rate = ctx.accounts.exchange_rate.deposit_rate;
-        let amt = collat * rate / DECIMALS_SCALAR;
+        let amt = collat * rate; // / DECIMALS_SCALAR; TODO get decimals from context
 
         let approved_minters = &state.approved_minters;
         if !approved_minters.contains(&ctx.accounts.minter.key()) {
@@ -92,7 +97,7 @@ pub mod vault {
         );
         token::transfer(cpi_ctx, collat)?;
 
-        // mint tokens to caller
+        // Mint tokens to caller
         let cpi_accounts = MintTo {
             mint: ctx.accounts.vault_token_mint.to_account_info(),
             to: ctx.accounts.caller_vault_token.to_account_info(),
@@ -107,6 +112,11 @@ pub mod vault {
             seeds,
         );
         token::mint_to(cpi_ctx, amt)?;
+
+        emit!(DepositEvent{
+            who: ctx.accounts.minter.key(),
+            amt: collat,
+        });
 
         Ok(())
     }
@@ -150,6 +160,11 @@ pub mod vault {
             cpi_accounts,
         );
         token::burn(cpi_ctx, amt)?;
+
+        emit!(RedeemEvent{
+            who: ctx.accounts.redeemer.key(),
+            amt: amt,
+        });
 
         Ok(())
     }
@@ -198,6 +213,11 @@ pub mod vault {
 
         approved_minters.push(minter);
 
+        emit!(NewMinterEvent{
+            new_minter: minter,
+            added_by: ctx.accounts.caller.key(),
+        });
+
         Ok(())
     }
 
@@ -213,6 +233,11 @@ pub mod vault {
         } else {
             return Err(MintError::MinterNotWhitelisted.into());
         }
+
+        emit!(MinterRemovedEvent{
+            removed: minter,
+            removed_by: ctx.accounts.caller.key(),
+        });
 
         Ok(())
     }
@@ -230,6 +255,11 @@ pub mod vault {
 
         approved_redeemers.push(redeemer);
 
+        emit!(NewRedeemerEvent{
+            new_redeemer: redeemer,
+            added_by: ctx.accounts.caller.key(),
+        });
+
         Ok(())
     }
 
@@ -245,6 +275,11 @@ pub mod vault {
         } else {
             return Err(MintError::RedeemerNotWhitelisted.into());
         }
+
+        emit!(RedeemerRemovedEvent{
+            removed: redeemer,
+            removed_by: ctx.accounts.caller.key(),
+        });
 
         Ok(())
     }
@@ -285,6 +320,11 @@ pub mod vault {
             return Err(MintError::NotManagerYet.into());
         }
 
+        emit!(ManagerRemovedEvent{
+            removed: manager,
+            removed_by: ctx.accounts.caller.key(),
+        });
+
         Ok(())
     }
 
@@ -295,6 +335,11 @@ pub mod vault {
 
         let vault_state = &mut ctx.accounts.vault_state;
         vault_state.admin = new_admin;
+
+        emit!(AdminTransferEvent{
+            old_admin: ctx.accounts.caller.key(),
+            new_admin: new_admin,
+        });
 
         Ok(())
     }
@@ -538,10 +583,9 @@ pub struct SetMaxRedeemPerBlock<'info> {
 }
 
 #[event]
-pub struct TransferEvent {
-    from: Pubkey,
-    to: Pubkey,
-    amt: u64,
+pub struct AssetAddedEvent {
+    who: Pubkey,
+    asset: Pubkey,
 }
 
 #[event]
@@ -563,9 +607,45 @@ pub struct RedeemEvent {
 }
 
 #[event]
+pub struct NewMinterEvent {
+    new_minter: Pubkey,
+    added_by: Pubkey,
+}
+
+#[event]
+pub struct MinterRemovedEvent {
+    removed: Pubkey,
+    removed_by: Pubkey,
+}
+
+#[event]
+pub struct NewRedeemerEvent {
+    new_redeemer: Pubkey,
+    added_by: Pubkey,
+}
+
+#[event]
+pub struct RedeemerRemovedEvent {
+    removed: Pubkey,
+    removed_by: Pubkey,
+}
+
+#[event]
 pub struct NewManagerEvent {
     new_manager: Pubkey,
     added_by: Pubkey,
+}
+
+#[event]
+pub struct ManagerRemovedEvent {
+    removed: Pubkey,
+    removed_by: Pubkey,
+}
+
+#[event]
+pub struct AdminTransferEvent{
+    old_admin: Pubkey,
+    new_admin: Pubkey,
 }
 
 #[error_code]
