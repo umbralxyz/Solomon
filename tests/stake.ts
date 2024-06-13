@@ -28,10 +28,11 @@ describe("stake", () => {
     [Buffer.from("vault-state"), Buffer.from(salt)],
     program.programId
   );
+  const newCD = 3;
 
   before(async () => {
     user = anchor.web3.Keypair.generate();
-    console.log("User key: ", user.publicKey);
+    console.log("User key: ", user.publicKey.toString());
     vaultAuthority = anchor.web3.Keypair.generate();
     unstakedMint = anchor.web3.Keypair.generate();
 
@@ -39,7 +40,7 @@ describe("stake", () => {
     await anchor.AnchorProvider.env().connection.requestAirdrop(vaultAuthority.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
   });
 
-  it("Initialize vault and add user", async () => {
+  it("Initialize vault, add user, set cooldown", async () => {
     vaultUnstaked = await getAssociatedTokenAddress(unstakedMint.publicKey, vaultAuthority.publicKey);
     userUnstaked = await getAssociatedTokenAddress(unstakedMint.publicKey, user.publicKey);
 
@@ -74,10 +75,10 @@ describe("stake", () => {
     const depositerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
     const userUnstakedBal = depositerInfo.value.data.parsed.info.tokenAmount.amount;
 
-    console.log("admin: ", adminKey);
+    console.log("Admin: ", adminKey.toString());
 
     // Initialize staking vault and token accounts
-    await program.methods.initializeVaultState(adminKey, new anchor.BN(0), salt).accounts({
+    await program.methods.initializeVaultState(adminKey, new anchor.BN(100000), salt).accounts({
       depositToken: unstakedMint.publicKey,
       caller: adminKey,
     }).rpc().catch(e => console.error(e));
@@ -105,10 +106,8 @@ describe("stake", () => {
 
     await anchor.AnchorProvider.env().sendAndConfirm(initUserStaked, []);
 
-    const stakingTokenAccountInfo = await program.provider.connection.getAccountInfo(stakingTokenPDA);
-    if (stakingTokenAccountInfo) {
-      console.log("Staking token account is initialized");
-    }
+    await program.methods.setCooldownDuration(new anchor.BN(newCD), salt).rpc();
+    console.log("Set staking cooldown to: ", newCD.toString());
   });
   
   
@@ -148,7 +147,7 @@ describe("stake", () => {
       caller: adminKey
     }).rpc().catch(e => console.error(e));
 
-    console.log("Added rewarder: ", user.publicKey);
+    console.log("Added rewarder: ", user.publicKey.toString());
 
     // Reward unstaked tokens to vault as user
     await program.methods.reward(reward, salt).accounts({
@@ -157,6 +156,13 @@ describe("stake", () => {
     }).signers([user]).rpc().catch(e => console.error(e));
 
     console.log("Rewarded tokens: ", reward.toString());
+
+    // Remove rewarder
+    await program.methods.removeRewarder(user.publicKey, salt).accounts({
+      caller: adminKey
+    }).rpc().catch(e => console.error(e));
+
+    console.log("Removed rewarder: ", user.publicKey.toString());
   });
 
   
@@ -167,24 +173,53 @@ describe("stake", () => {
     callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
     const stakedBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
 
-    // Unstake as user
+    // Unstake as user before CD
     await program.methods.unstake(salt).accounts({
       userDepositTokenAccount: userUnstaked,
       userStakingTokenAccount: userStaked,
       user: user.publicKey
     }).signers([user]).rpc().catch(e => console.error(e));
 
-    // Get balances of user after (no rewards generated because insufficent time has passed)
-    // Cooldown for tests is set to 0 so all deposits can be withdrawn immediately
+    // Get balances of user after (no deposits withdrawn because insufficent time has passed)
     callerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
     const unstakedAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
     callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
     const stakedAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
 
+    await sleep(1000 * (newCD));
+
+    // Unstake as user after CD
+    await program.methods.unstake(salt).accounts({
+      userDepositTokenAccount: userUnstaked,
+      userStakingTokenAccount: userStaked,
+      user: user.publicKey
+    }).signers([user]).rpc().catch(e => console.error(e));
+
+    // Get balances of user after cooldown has passed
+    callerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
+    const unstakedAfterCD = callerInfo.value.data.parsed.info.tokenAmount.amount;
+    callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
+    const stakedAfterCD = callerInfo.value.data.parsed.info.tokenAmount.amount;
+
     console.log("User unstaked tokens before unstaking: ", unstakedBefore);
     console.log("User staked tokens before unstaking: ", stakedBefore);
-    console.log("User unstaked tokens after unstaking: ", unstakedAfter);
-    console.log("User staked tokens after unstaking: ", stakedAfter);
+    console.log("User unstaked tokens after unstaking (before CD end): ", unstakedAfter);
+    console.log("User staked tokens after unstaking (before CD end): ", stakedAfter);
+    console.log("User unstaked tokens after unstaking (after CD end): ", unstakedAfterCD);
+    console.log("User staked tokens after unstaking (after CD end): ", stakedAfterCD);
   });
   
+  it("Transfer admin back and forth", async () => {
+    await program.methods.transferAdmin(user.publicKey, salt).rpc()
+    console.log("Transfered admin to: ", user.publicKey.toString());
+
+    await program.methods.transferAdmin(adminKey, salt).accounts({
+      caller: user.publicKey,
+    }).signers([user]).rpc();
+    console.log("Transfered admin back to: ", adminKey.toString());
+  });
 });
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}

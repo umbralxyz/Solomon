@@ -38,7 +38,6 @@ describe("vault", () => {
   let depositer: anchor.web3.Keypair;
   let vaultAuthority: anchor.web3.Keypair;
   let vaultCollat: anchor.web3.PublicKey;
-  let mintTokenVault: anchor.web3.PublicKey;
   let userCollat: anchor.web3.PublicKey;
   let userVaultToken: anchor.web3.PublicKey;
 
@@ -57,29 +56,21 @@ describe("vault", () => {
     await program.methods.initializeVaultState(adminKey).accounts({
       signer: adminKey,
     }).rpc();
-    console.log("admin: ", adminKey);
+    console.log("Admin: ", adminKey.toString());
 
     // Remove admin from whitelisted minters / redeemers (added by default)
-    await program.methods.removeMinter(adminKey).accounts({
-      vaultState: vaultStatePDA,
-    }).rpc()
-    console.log("Removed minter: ", adminKey);
+    await program.methods.removeMinter(adminKey).rpc();
+    console.log("Removed minter: ", adminKey.toString());
 
-    await program.methods.removeRedeemer(adminKey).accounts({
-      vaultState: vaultStatePDA,
-    }).rpc()
-    console.log("Removed redeemer: ", adminKey);
+    await program.methods.removeRedeemer(adminKey).rpc();
+    console.log("Removed redeemer: ", adminKey.toString());
 
     // Whitelist minter (add admin back as whitelisted minter / redeemer)
-    await program.methods.whitelistMinter(adminKey).accounts({
-      vaultState: vaultStatePDA,
-    }).rpc()
-    console.log("Whitelisted minter: ", adminKey);
+    await program.methods.whitelistMinter(adminKey).rpc();
+    console.log("Whitelisted minter: ", adminKey.toString());
 
-    await program.methods.whitelistRedeemer(adminKey).accounts({
-      vaultState: vaultStatePDA,
-    }).rpc()
-    console.log("Whitelisted redeemer: ", adminKey);
+    await program.methods.whitelistRedeemer(adminKey).rpc();
+    console.log("Whitelisted redeemer: ", adminKey.toString());
   });
   
   it("Initialize Mint and mint tokens", async () => {
@@ -91,7 +82,7 @@ describe("vault", () => {
     // Get the address for admin's VaultToken ATA and create
     associatedTokenAccount = await getAssociatedTokenAddress(vaultMint, key);
 
-    console.log("Vault mint address: ", vaultMint);
+    console.log("Vault mint address: ", vaultMint.toString());
     const ataTx = new anchor.web3.Transaction().add(
       createAssociatedTokenAccountInstruction(key, associatedTokenAccount, key, vaultMint),
     );
@@ -126,7 +117,7 @@ describe("vault", () => {
 
     await anchor.AnchorProvider.env().sendAndConfirm(userTokenMintTx, [userTokenMintKey]);
 
-    console.log("Collat Mint key: ", userTokenMintKey.publicKey);
+    console.log("Collat Mint key: ", userTokenMintKey.publicKey.toString());
     
     const createVaultsTx = new anchor.web3.Transaction().add(
       createAssociatedTokenAccountInstruction(adminKey, vaultCollat, vaultAuthority.publicKey, userTokenMintKey.publicKey),
@@ -147,7 +138,7 @@ describe("vault", () => {
     // Get minted token amount on the ATA for depositer
     const depositerInfo = await program.provider.connection.getParsedAccountInfo(userCollat);
     const collatMinted = depositerInfo.value.data.parsed.info.tokenAmount.amount;
-    console.log("Collat minted: ", collatMinted);
+    console.log("Collat minted: ", collatMinted.toString());
   });
 
   
@@ -160,27 +151,22 @@ describe("vault", () => {
     const addAssetTx = await program.methods.addAsset(userTokenMintKey.publicKey, depositRate, redeemRate).accounts({
       authority: adminKey,
       collateralTokenMint: userTokenMintKey.publicKey,
-      vaultState: vaultStatePDA,
     }).rpc();
 
     console.log("Add asset signature: ", addAssetTx);
-    console.log("Asset added: ", assetKey);
+    console.log("Asset added: ", assetKey.toString());
 
     // Whitelist depositer as minter and redeemer
-    await program.methods.whitelistMinter(depositer.publicKey).accounts({
-      vaultState: vaultStatePDA,
-    }).rpc()
-    console.log("Whitelisted minter: ", adminKey);
+    await program.methods.whitelistMinter(depositer.publicKey).rpc();
+    console.log("Whitelisted minter: ", adminKey.toString());
 
-    await program.methods.whitelistRedeemer(depositer.publicKey).accounts({
-      vaultState: vaultStatePDA,
-    }).rpc()
-    console.log("Whitelisted redeemer: ", adminKey);
+    await program.methods.whitelistRedeemer(depositer.publicKey).rpc();
+    console.log("Whitelisted redeemer: ", adminKey.toString());
 
     const deposit = new anchor.BN(1000000000);
     const redeem = new anchor.BN(500000000);
     
-    console.log("Caller collat mint: ", userCollat)
+    console.log("Caller collat mint: ", userCollat.toString())
     // Get user balances before deposit
     let callerInfo = await program.provider.connection.getParsedAccountInfo(userVaultToken);
     const vaultTokensBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
@@ -193,7 +179,6 @@ describe("vault", () => {
       callerVaultToken: userVaultToken,
       minter: depositer.publicKey,
       collateralTokenMint: userTokenMintKey.publicKey,
-      vaultState: vaultStatePDA,
     }).signers([depositer]).rpc().catch(e => console.error(e));
     
 
@@ -239,9 +224,9 @@ describe("vault", () => {
     const amt = new anchor.BN(40000);
     
     // Add manager
-    await program.methods.addManager(withdrawerCollat).accounts({
-      vaultState: vaultStatePDA,
-    }).rpc()
+    await program.methods.addManager(withdrawerCollat).rpc();
+
+    console.log("Added manager: ", withdrawerCollat.toString());
 
     let callerInfo = await program.provider.connection.getParsedAccountInfo(withdrawerCollat);
     const withdrawerBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
@@ -250,7 +235,6 @@ describe("vault", () => {
     const withdrawTx = await program.methods.withdraw(amt).accounts({
       caller: withdrawerCollat,
       collatMint: userTokenMintKey.publicKey,
-      vaultState: vaultStatePDA,
     }).signers([]).rpc();
     
     callerInfo = await program.provider.connection.getParsedAccountInfo(withdrawerCollat);
@@ -258,6 +242,20 @@ describe("vault", () => {
 
     console.log("Withdrawer collat tokens before withdraw: ", withdrawerBefore);
     console.log("Withdrawer collat tokens after withdraw: ", withdrawerAfter);
+
+    // Add manager
+    await program.methods.removeManager(withdrawerCollat).rpc();
+
+    console.log("Removed manager: ", withdrawerCollat.toString());
   });
-  
+
+  it("Transfer admin back and forth", async () => {
+    await program.methods.transferAdmin(depositer.publicKey).rpc()
+    console.log("Transfered admin to: ", depositer.publicKey.toString());
+
+    await program.methods.transferAdmin(adminKey).accounts({
+      caller: depositer.publicKey,
+    }).signers([depositer]).rpc();
+    console.log("Transfered admin back to: ", adminKey.toString());
+  });
  });

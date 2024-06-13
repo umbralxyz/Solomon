@@ -18,7 +18,6 @@ pub struct VaultState {
 
     pub cooldown: u64,
     pub max_cooldown: u64,
-    pub min_shares: u64,
     pub total_deposits: u64,
     pub reward_per_deposit: u64,
     pub last_distribution_amt: u64,
@@ -47,7 +46,6 @@ pub mod stake {
     ) -> Result<()> {
         ctx.accounts.vault_state.max_cooldown = max_cooldown;
         ctx.accounts.vault_state.cooldown = max_cooldown;
-        ctx.accounts.vault_state.min_shares = 1; // TODO determine appropriate minimum
         ctx.accounts.vault_state.total_deposits = 0;
         ctx.accounts.vault_state.reward_per_deposit = 0;
         ctx.accounts.vault_state.deposit_token = ctx.accounts.deposit_token.key();
@@ -56,6 +54,7 @@ pub mod stake {
         ctx.accounts.vault_state.last_distribution_time = Clock::get()?.unix_timestamp as u64;
         ctx.accounts.vault_state.bump = ctx.bumps.vault_state;
         ctx.accounts.vault_state.deposit_token = ctx.accounts.deposit_token.key();
+        ctx.accounts.vault_state.deposit_token_decimals = ctx.accounts.deposit_token.decimals;
         ctx.accounts.vault_state.rewarders = vec![];
         ctx.accounts.vault_state.blacklist = vec![];
         Ok(())
@@ -92,10 +91,6 @@ pub mod stake {
         let auth = ctx.accounts.vault_state.to_account_info();
         let state = &mut ctx.accounts.vault_state;
         let user_data = &mut ctx.accounts.user_data;
-
-        if ctx.accounts.vault_token_account.amount < state.min_shares {
-            //return Err(StakeError::MinSharesViolation.into()); TODO uncomment after min_shares calibration
-        }
         
         if state.blacklist.contains(&ctx.accounts.user.key()) {
             return Err(StakeError::Blacklisted.into());
@@ -159,7 +154,7 @@ pub mod stake {
 
         let time = Clock::get()?.unix_timestamp as u64;
 
-        let mut deposits = ctx.accounts.user_data.deposits; // TODO: consider renaming this
+        let mut deposits = ctx.accounts.user_data.deposits; 
 
         for (cd, hold) in &ctx.accounts.user_data.cooldowns {
             if cd >= &time {
@@ -208,6 +203,7 @@ pub mod stake {
 
         // Clear deposits that were unstaked and update user reward tally and deposits
         user_data.cooldowns.retain(|&(cd, _)| cd >= time);
+        user_data.reward_tally = user_data.deposits * state.reward_per_deposit;
         user_data.reward_tally -= state.reward_per_deposit * deposits / VAULT_TOKEN_SCALAR;
         user_data.deposits -= deposits;
 
@@ -290,6 +286,22 @@ pub mod stake {
         emit!(RewardEvent{
             who: ctx.accounts.caller.key(),
             amt: amt,
+        });
+
+        Ok(())
+    }
+
+    pub fn transfer_admin(ctx: Context<TransferAdmin>, new_admin: Pubkey, _salt: [u8; 8]) -> Result<()> {
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
+            return Err(StakeError::NotAdmin.into());
+        }
+
+        let vault_state = &mut ctx.accounts.vault_state;
+        vault_state.admin = new_admin;
+
+        emit!(AdminTransferEvent{
+            old_admin: ctx.accounts.caller.key(),
+            new_admin: new_admin,
         });
 
         Ok(())
@@ -565,6 +577,19 @@ pub struct Rewarders<'info> {
     pub caller: Signer<'info>,
 }
 
+#[derive(Accounts)]
+#[instruction(new_admin: Pubkey, salt: [u8; 8])]
+pub struct TransferAdmin<'info> {
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED, salt.as_ref()], 
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub caller: Signer<'info>,
+}
+
 #[account]
 pub struct UserPDA {
     pub user: Pubkey,
@@ -607,6 +632,12 @@ pub struct RemoveRewarderEvent {
 pub struct RewardEvent {
     who: Pubkey,
     amt: u64,
+}
+
+#[event]
+pub struct AdminTransferEvent{
+    old_admin: Pubkey,
+    new_admin: Pubkey,
 }
 
 #[error_code]

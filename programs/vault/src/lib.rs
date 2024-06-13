@@ -12,8 +12,6 @@ const VAULT_STATE_SEED: &[u8] = b"vault-state";
 #[account]
 pub struct VaultState {
     pub vault_token_mint: Pubkey,
-    pub minted_per_block: u64,
-    pub redeemed_per_block: u64,
     pub approved_minters: Vec<Pubkey>,
     pub approved_redeemers: Vec<Pubkey>,
     pub managers: Vec<Pubkey>,
@@ -40,8 +38,6 @@ pub mod vault {
         ctx: Context<InitializeVaultState>,
         admin: Pubkey,
     ) -> Result<()> {
-        ctx.accounts.vault_state.minted_per_block = 0;
-        ctx.accounts.vault_state.redeemed_per_block = 0;
         ctx.accounts.vault_state.approved_minters = vec![admin];
         ctx.accounts.vault_state.approved_redeemers = vec![admin];
         ctx.accounts.vault_state.admin = admin;
@@ -404,7 +400,11 @@ pub struct AddAsset<'info> {
     #[account(mut)]
     pub collateral_token_mint: Account<'info, Mint>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub authority: Signer<'info>,
@@ -455,7 +455,11 @@ pub struct Deposit<'info> {
     /// that is owned by this program and associated with this mint
     #[account(mut)]
     pub collateral_token_mint: Account<'info, Mint>,
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub minter: Signer<'info>,
@@ -530,13 +534,21 @@ pub struct Withdraw<'info> {
     pub caller: Account<'info, TokenAccount>,
     #[account(mut)]
     pub collat_mint: Account<'info, Mint>,
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
     pub vault_state: Account<'info, VaultState>,
 }
 
 #[derive(Accounts)]
 pub struct Minters<'info> {
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub caller: Signer<'info>,
@@ -544,7 +556,11 @@ pub struct Minters<'info> {
 
 #[derive(Accounts)]
 pub struct Redeemers<'info> {
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub caller: Signer<'info>,
@@ -552,7 +568,11 @@ pub struct Redeemers<'info> {
 
 #[derive(Accounts)]
 pub struct Managers<'info> {
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub caller: Signer<'info>,
@@ -560,23 +580,11 @@ pub struct Managers<'info> {
 
 #[derive(Accounts)]
 pub struct TransferAdmin<'info> {
-    #[account(mut)]
-    pub vault_state: Account<'info, VaultState>,
-    #[account(mut)]
-    pub caller: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct SetMaxMintPerBlock<'info> {
-    #[account(mut)]
-    pub vault_state: Account<'info, VaultState>,
-    #[account(mut)]
-    pub caller: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct SetMaxRedeemPerBlock<'info> {
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
     pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
     pub caller: Signer<'info>,
