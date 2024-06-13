@@ -1,25 +1,32 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer, InitializeMint};
-use std::collections::{HashMap, HashSet};
+use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
 
 declare_id!("A3p6U1p5jjZQbu346LrJb1asrTjkEPhDkfH4CXCYgpEd");
 
+const DECIMALS_SCALAR: u64 = 1_000_000_000;
+const MINT_SEED: &[u8] = b"mint";
+const TOKEN_ATA_SEED: &[u8] = b"token-account";
+const EXCHANGE_RATE_SEED: &[u8] = b"exchange-rate";
+const VAULT_STATE_SEED: &[u8] = b"vault-state";
+
 #[account]
-pub struct MintState {
+pub struct VaultState {
     pub vault_token_mint: Pubkey,
-    pub max_mint_per_block: u64,
-    pub max_redeem_per_block: u64,
     pub minted_per_block: u64,
     pub redeemed_per_block: u64,
     pub approved_minters: Vec<Pubkey>,
     pub approved_redeemers: Vec<Pubkey>,
     pub managers: Vec<Pubkey>,
     pub admin: Pubkey,
+    pub bump: u8,
 }
 
 #[account]
-struct ExchangeRate {
+pub struct ExchangeRate {
+    /// The deposit rate is defined in sclaed units of stable coin per asset coin
+    /// (1e9)
     deposit_rate: u64,
+    /// The redeem rate is defined in scaled units of asset coin per stable coin
     redeem_rate: u64,
 }
 
@@ -29,24 +36,17 @@ pub mod vault {
 
     use super::*;
 
-    pub fn initialize_mint_state(
-        ctx: Context<InitializeMintState>,
-        max_mint_per_block: u64,
-        max_redeem_per_block: u64,
+    pub fn initialize_vault_state(
+        ctx: Context<InitializeVaultState>,
+        admin: Pubkey,
     ) -> Result<()> {
-        let admin = ctx.accounts.admin.key();
-        let mint_state = &mut ctx.accounts.mint_state;
-        //let b = ctx.bumps.mint_state;
-
-        mint_state.max_mint_per_block = max_mint_per_block;
-        mint_state.max_redeem_per_block = max_redeem_per_block;
-        mint_state.minted_per_block = 0;
-        mint_state.redeemed_per_block = 0;
-        mint_state.approved_minters = vec![admin];
-        mint_state.approved_redeemers = vec![admin];
-        mint_state.admin = admin;
-
-        let create_mint = token::Cre
+        ctx.accounts.vault_state.minted_per_block = 0;
+        ctx.accounts.vault_state.redeemed_per_block = 0;
+        ctx.accounts.vault_state.approved_minters = vec![admin];
+        ctx.accounts.vault_state.approved_redeemers = vec![admin];
+        ctx.accounts.vault_state.admin = admin;
+        ctx.accounts.vault_state.vault_token_mint = ctx.accounts.vault_token.key();
+        ctx.accounts.vault_state.bump = ctx.bumps.vault_state;
 
         Ok(())
     }
@@ -55,27 +55,29 @@ pub mod vault {
     // The redeem rate is (asset units / stable units) [how many asset coins a depositer will get per stable coin]
     pub fn add_asset(
         ctx: Context<AddAsset>,
-        _asset: Pubkey,
+        asset: Pubkey,
         deposit_rate: u64,
         redeem_rate: u64,
     ) -> Result<()> {
-        if ctx.accounts.authority.key() != ctx.accounts.mint_state.admin {
+        if ctx.accounts.authority.key() != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
         }
 
         ctx.accounts.exchange_rate.deposit_rate = deposit_rate;
         ctx.accounts.exchange_rate.redeem_rate = redeem_rate;
 
+        emit!(AssetAddedEvent{
+            who: ctx.accounts.authority.key(),
+            asset: asset,
+        });
+
         Ok(())
     }
 
     pub fn deposit(ctx: Context<Deposit>, collat: u64) -> Result<()> {
-        let state = &ctx.accounts.mint_state;
+        let state = &ctx.accounts.vault_state;
         let rate = ctx.accounts.exchange_rate.deposit_rate;
-        let amt = collat * rate;
-        if state.redeemed_per_block + amt > state.max_redeem_per_block {
-            return Err(MintError::MaxRedeemExceeded.into());
-        }
+        let amt = collat * rate; // / DECIMALS_SCALAR; TODO get decimals from context
 
         let approved_minters = &state.approved_minters;
         if !approved_minters.contains(&ctx.accounts.minter.key()) {
@@ -89,100 +91,78 @@ pub mod vault {
             authority: ctx.accounts.minter.to_account_info(),
         };
 
-        let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), transfer_instruction);
-
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            transfer_instruction,
+        );
         token::transfer(cpi_ctx, collat)?;
 
-        // mint tokens to caller
+        // Mint tokens to caller
         let cpi_accounts = MintTo {
             mint: ctx.accounts.vault_token_mint.to_account_info(),
             to: ctx.accounts.caller_vault_token.to_account_info(),
-            authority: ctx.accounts.vault_token_mint.to_account_info(),
+            authority: ctx.accounts.vault_state.to_account_info(),
         };
 
-        // todo: deploy token
+        let seeds: &[&[u8]] = &[VAULT_STATE_SEED.as_ref(), &[ctx.accounts.vault_state.bump]];
+        let seeds = &[seeds][..];
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts,
+            seeds,
+        );
+        token::mint_to(cpi_ctx, amt)?;
 
-        // let cpi_program = ctx.accounts.token_program.to_account_info();
-
-        // let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, &[&[
-        //     b"mintstate".as_ref(),
-        // ]]);
-
-        // token::mint_to(cpi_ctx, amt)?;
+        emit!(DepositEvent{
+            who: ctx.accounts.minter.key(),
+            amt: collat,
+        });
 
         Ok(())
     }
 
     pub fn redeem(ctx: Context<Redeem>, amt: u64) -> Result<()> {
-        let caller = &ctx.accounts.redeemer.key();
-        let state = &mut ctx.accounts.mint_state;
-        let mut rate = 0;
-        let asset = ctx.accounts.collat_program.key();
+        let state = &ctx.accounts.vault_state;
+        let rate = ctx.accounts.exchange_rate.redeem_rate;
+        let decimals = ctx.accounts.collateral_token_mint.decimals;
+        let collat = amt * rate / 10_u64.pow(decimals as u32);
 
-        if let Some(i) = state
-            .exchange_rates
-            .iter()
-            .position(|(pubkey, _, _)| *pubkey == asset)
-        {
-            rate = state.exchange_rates[i].2;
-        } else {
-            return Err(MintError::AssetNotSupported.into());
-        }
-
-        let collat = amt * rate;
-
-        if state.redeemed_per_block + amt > state.max_redeem_per_block {
-            return Err(MintError::MaxRedeemExceeded.into());
-        }
-
-        let approved_redeemers = &state.approved_redeemers;
-        let authority = ctx.accounts.redeemer.key();
-
-        if !approved_redeemers.contains(&authority) {
+        let approved_minters = &state.approved_minters;
+        if !approved_minters.contains(&ctx.accounts.redeemer.key()) {
             return Err(MintError::NotAnApprovedRedeemer.into());
         }
 
-        // Transfer "mint token" to mint vault
+        // Transfer collateral to the caller
         let transfer_instruction = Transfer {
-            from: ctx.accounts.caller_token.to_account_info(),
-            to: ctx.accounts.mint_token_vault.to_account_info(),
+            from: ctx.accounts.program_collateral.to_account_info(),
+            to: ctx.accounts.caller_collateral.to_account_info(),
+            authority: ctx.accounts.vault_state.to_account_info(),
+        };
+
+        let seeds: &[&[u8]] = &[VAULT_STATE_SEED, &[ctx.bumps.vault_state]];
+        let seeds = &[seeds][..];
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            transfer_instruction,
+            seeds,
+        );
+        token::transfer(cpi_ctx, collat)?;
+
+        // Burn staked tokens that caller redeemed
+        let cpi_accounts = Burn {
+            mint: ctx.accounts.vault_token_mint.to_account_info(),
+            from: ctx.accounts.caller_vault_token.to_account_info(),
             authority: ctx.accounts.redeemer.to_account_info(),
         };
 
-        let cpi_program = ctx.accounts.token_program.to_account_info();
-        let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
-
-        token::transfer(cpi_ctx, amt)?;
-
-        // Transfer collat to redeemer
-        let transfer_instruction = Transfer {
-            from: ctx.accounts.mint_collat_vault.to_account_info(),
-            to: ctx.accounts.caller_collat.to_account_info(),
-            authority: ctx.accounts.vault_authority.to_account_info(),
-        };
-
-        let cpi_program = ctx.accounts.collat_program.to_account_info();
-        let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
-
-        token::transfer(cpi_ctx, collat)?;
-
-        // burn tokens that caller redeemed
-        let cpi_accounts = Burn {
-            mint: ctx.accounts.mint.to_account_info(),
-            from: ctx.accounts.mint_token_vault.to_account_info(),
-            authority: ctx.accounts.vault_authority.to_account_info(),
-        };
-
-        let cpi_program = ctx.accounts.token_program.to_account_info();
-
-        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts,
+        );
         token::burn(cpi_ctx, amt)?;
 
-        state.redeemed_per_block += amt;
-
-        emit!(RedeemEvent {
-            who: *caller,
+        emit!(RedeemEvent{
+            who: ctx.accounts.redeemer.key(),
             amt: amt,
         });
 
@@ -191,19 +171,24 @@ pub mod vault {
 
     pub fn withdraw(ctx: Context<Withdraw>, amt: u64) -> Result<()> {
         let caller = &ctx.accounts.caller.key();
-        if !ctx.accounts.mint_state.managers.contains(caller) {
+        if !ctx.accounts.vault_state.managers.contains(caller) {
             return Err(MintError::NotManager.into());
         }
 
         // Transfer collateral
         let transfer_instruction = Transfer {
-            from: ctx.accounts.mint_collat_vault.to_account_info(),
+            from: ctx.accounts.program_collat.to_account_info(),
             to: ctx.accounts.caller.to_account_info(),
-            authority: ctx.accounts.vault_authority.to_account_info(),
+            authority: ctx.accounts.vault_state.to_account_info(),
         };
 
-        let cpi_program = ctx.accounts.token_program.to_account_info();
-        let cpi_ctx = CpiContext::new(cpi_program, transfer_instruction);
+        let seeds: &[&[u8]] = &[VAULT_STATE_SEED, &[ctx.accounts.vault_state.bump]];
+        let seeds = &[seeds][..];
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            transfer_instruction,
+            seeds,
+        );
 
         token::transfer(cpi_ctx, amt)?;
 
@@ -216,11 +201,11 @@ pub mod vault {
     }
 
     pub fn whitelist_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
         }
 
-        let approved_minters = &mut ctx.accounts.mint_state.approved_minters;
+        let approved_minters = &mut ctx.accounts.vault_state.approved_minters;
 
         if approved_minters.contains(&minter.clone()) {
             return Err(MintError::AlreadyMinter.into());
@@ -228,15 +213,20 @@ pub mod vault {
 
         approved_minters.push(minter);
 
+        emit!(NewMinterEvent{
+            new_minter: minter,
+            added_by: ctx.accounts.caller.key(),
+        });
+
         Ok(())
     }
 
     pub fn remove_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
         }
 
-        let approved_minters = &mut ctx.accounts.mint_state.approved_minters;
+        let approved_minters = &mut ctx.accounts.vault_state.approved_minters;
 
         if let Some(i) = approved_minters.iter().position(|&x| x == minter) {
             approved_minters.swap_remove(i);
@@ -244,15 +234,20 @@ pub mod vault {
             return Err(MintError::MinterNotWhitelisted.into());
         }
 
+        emit!(MinterRemovedEvent{
+            removed: minter,
+            removed_by: ctx.accounts.caller.key(),
+        });
+
         Ok(())
     }
 
     pub fn whitelist_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
         }
 
-        let approved_redeemers = &mut ctx.accounts.mint_state.approved_redeemers;
+        let approved_redeemers = &mut ctx.accounts.vault_state.approved_redeemers;
 
         if approved_redeemers.contains(&redeemer.clone()) {
             return Err(MintError::AlreadyRedeemer.into());
@@ -260,15 +255,20 @@ pub mod vault {
 
         approved_redeemers.push(redeemer);
 
+        emit!(NewRedeemerEvent{
+            new_redeemer: redeemer,
+            added_by: ctx.accounts.caller.key(),
+        });
+
         Ok(())
     }
 
     pub fn remove_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
         }
 
-        let approved_redeemers = &mut ctx.accounts.mint_state.approved_redeemers;
+        let approved_redeemers = &mut ctx.accounts.vault_state.approved_redeemers;
 
         if let Some(i) = approved_redeemers.iter().position(|&x| x == redeemer) {
             approved_redeemers.swap_remove(i);
@@ -276,17 +276,22 @@ pub mod vault {
             return Err(MintError::RedeemerNotWhitelisted.into());
         }
 
+        emit!(RedeemerRemovedEvent{
+            removed: redeemer,
+            removed_by: ctx.accounts.caller.key(),
+        });
+
         Ok(())
     }
 
     pub fn add_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
         let caller = ctx.accounts.caller.key();
 
-        if caller != ctx.accounts.mint_state.admin {
+        if caller != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
         }
 
-        let managers = &mut ctx.accounts.mint_state.managers;
+        let managers = &mut ctx.accounts.vault_state.managers;
 
         if !managers.contains(&manager) {
             managers.push(manager);
@@ -303,11 +308,11 @@ pub mod vault {
     }
 
     pub fn remove_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
         }
 
-        let managers = &mut ctx.accounts.mint_state.managers;
+        let managers = &mut ctx.accounts.vault_state.managers;
 
         if let Some(i) = managers.iter().position(|&x| x == manager) {
             managers.swap_remove(i);
@@ -315,71 +320,107 @@ pub mod vault {
             return Err(MintError::NotManagerYet.into());
         }
 
+        emit!(ManagerRemovedEvent{
+            removed: manager,
+            removed_by: ctx.accounts.caller.key(),
+        });
+
         Ok(())
     }
 
     pub fn transfer_admin(ctx: Context<TransferAdmin>, new_admin: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.mint_state.admin {
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
         }
 
-        let mint_state = &mut ctx.accounts.mint_state;
-        mint_state.admin = new_admin;
+        let vault_state = &mut ctx.accounts.vault_state;
+        vault_state.admin = new_admin;
+
+        emit!(AdminTransferEvent{
+            old_admin: ctx.accounts.caller.key(),
+            new_admin: new_admin,
+        });
 
         Ok(())
     }
+}
 
-    pub fn set_max_mint_per_block(ctx: Context<SetMaxMintPerBlock>, new_max: u64) -> Result<()> {
-        let mint_state = &mut ctx.accounts.mint_state;
-        mint_state.max_mint_per_block = new_max;
-        Ok(())
-    }
+#[derive(Accounts)]
+#[instruction(admin: Pubkey)]
+pub struct InitializeVaultState<'info> {
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
 
-    pub fn set_max_redeem_per_block(
-        ctx: Context<SetMaxRedeemPerBlock>,
-        new_max: u64,
-    ) -> Result<()> {
-        let mint_state = &mut ctx.accounts.mint_state;
-        mint_state.max_redeem_per_block = new_max;
-        Ok(())
-    }
+    // todo: space
+    #[account(
+        init, 
+        payer = signer, 
+        space = 512,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+
+    #[account(
+        init, 
+        payer = signer, 
+        mint::decimals = 9, 
+        mint::authority = vault_state,
+        seeds = [MINT_SEED], 
+        bump
+    )]
+    pub vault_token: Account<'info, Mint>,
+
+    #[account(mut)]
+    pub signer: Signer<'info>,
 }
 
 #[derive(Accounts)]
 #[instruction(asset: Pubkey)]
 pub struct AddAsset<'info> {
-    #[account(mut)]
-    pub system_program: AccountInfo<'info>,
-    #[account(mut, seeds = [b"mintstate"], bump)]
-    pub mint_state: Account<'info, MintState>,
-    #[account(mut)]
-    pub authority: Signer<'info>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+
     #[account(
         init_if_needed, 
         payer = authority, 
-        seeds = [b"exchangerate", asset.as_ref()],
+        seeds = [EXCHANGE_RATE_SEED, asset.as_ref()],
         space = 8 + 8 + 8,
         bump
     )]
     pub exchange_rate: Account<'info, ExchangeRate>,
+
+    /// The program owned collateral
+    #[account(
+        init_if_needed,
+        seeds = [TOKEN_ATA_SEED],
+        bump,
+        payer = authority,
+        token::mint = collateral_token_mint,
+        token::authority = vault_state,
+    )]
+    pub program_collateral: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub collateral_token_mint: Account<'info, Mint>,
+
+    #[account(mut)]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
 #[instruction(collat: u64)]
 pub struct Deposit<'info> {
-    /// Requiered by init
-    #[account(mut)]
-    pub system_program: AccountInfo<'info>,
-    #[account(mut)]
-    pub token_program: AccountInfo<'info>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+
     /// The program owned collateral
     #[account(
-        init_if_needed,
-        seeds = [b"tokenaccount", collateral_token_mint.key().as_ref()],
+        mut,
+        seeds = [TOKEN_ATA_SEED],
         bump,
-        token::mint = collateral_token_mint,
-        token::authority = mint_state,
-        payer = minter,
     )]
     pub program_collateral: Account<'info, TokenAccount>,
     /// The caller owned collateral
@@ -396,133 +437,155 @@ pub struct Deposit<'info> {
         token::authority = minter,
     )]
     pub caller_vault_token: Account<'info, TokenAccount>,
-
-    /// The minter
     #[account(
-        seeds = [b"tokenaccount", collateral_token_mint.key().as_ref()],
+        seeds = [EXCHANGE_RATE_SEED, collateral_token_mint.key().as_ref()],
         bump,
     )]
     pub exchange_rate: Account<'info, ExchangeRate>,
-    #[account(mut)]
-    pub mint_state: Account<'info, MintState>,
-    #[account(mut)]
-    pub minter: Signer<'info>,
-    /// todo check is valid mint
+    #[account(
+        mut,
+        constraint = vault_token_mint.key() == vault_state.vault_token_mint,
+        seeds = [MINT_SEED],
+        bump
+    )]
+    pub vault_token_mint: Account<'info, Mint>,
+
+    /// The collateral token mint address,
+    /// we dont need any contraints here becauase we also need an exchange rate address
+    /// that is owned by this program and associated with this mint
     #[account(mut)]
     pub collateral_token_mint: Account<'info, Mint>,
-    /// Stable coin
-    /// todo check is correct token
     #[account(mut)]
-    pub vault_token_mint: Account<'info, Mint>,
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub minter: Signer<'info>,
 }
 
 #[derive(Accounts)]
 pub struct Redeem<'info> {
+    pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
-    pub collat_program: Program<'info, Token>,
-    /// CHECK: the mint's collateral vault
+
+    /// The program owned collateral
+    #[account(
+        mut,
+        seeds = [TOKEN_ATA_SEED],
+        bump,
+    )]
+    pub program_collateral: Account<'info, TokenAccount>,
+    /// The caller owned collateral
+    #[account(
+        mut,
+        token::mint = collateral_token_mint,
+        token::authority = redeemer,
+    )]
+    pub caller_collateral: Account<'info, TokenAccount>,
+    /// The caller owned vault token ATA
+    #[account(
+        mut,
+        token::mint = vault_token_mint,
+        token::authority = redeemer,
+    )]
+    pub caller_vault_token: Account<'info, TokenAccount>,
+    #[account(
+        seeds = [EXCHANGE_RATE_SEED, collateral_token_mint.key().as_ref()],
+        bump,
+    )]
+    pub exchange_rate: Account<'info, ExchangeRate>,
+    #[account(
+        mut,
+        constraint = vault_token_mint.key() == vault_state.vault_token_mint,
+        seeds = [MINT_SEED],
+        bump,
+    )]
+    pub vault_token_mint: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump,
+    )]
+    pub vault_state: Account<'info, VaultState>,
     #[account(mut)]
-    pub mint_collat_vault: Account<'info, TokenAccount>,
-    /// CHECK: the mint's "mint token" vault
-    #[account(mut)]
-    pub mint_token_vault: Account<'info, TokenAccount>,
-    /// CHECK: the redeemer's collateral account
-    #[account(mut)]
-    pub caller_collat: Account<'info, TokenAccount>,
-    /// CHECK: the redeemer's "mint token" account
-    #[account(mut)]
-    pub caller_token: Account<'info, TokenAccount>,
     pub redeemer: Signer<'info>,
+    /// The collateral token mint address,
+    /// we dont need any contraints here becauase we also need an exchange rate address
+    /// that is owned by this program and associated with this mint
     #[account(mut)]
-    pub mint_state: Account<'info, MintState>,
-    pub vault_authority: Signer<'info>,
-    #[account(mut)]
-    pub mint: Account<'info, Mint>,
+    pub collateral_token_mint: Account<'info, Mint>,
 }
 
 #[derive(Accounts)]
 pub struct Withdraw<'info> {
     pub token_program: Program<'info, Token>,
-    /// CHECK: the token account to withdraw from
-    #[account(mut)]
-    pub mint_collat_vault: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds = [TOKEN_ATA_SEED],
+        bump
+    )]
+    pub program_collat: Account<'info, TokenAccount>,
+
     #[account(mut)]
     pub caller: Account<'info, TokenAccount>,
-    /// CHECK: an individual allowed to withdraw
-    pub vault_authority: Signer<'info>,
     #[account(mut)]
-    pub mint_state: Account<'info, MintState>,
+    pub collat_mint: Account<'info, Mint>,
+    #[account(mut)]
+    pub vault_state: Account<'info, VaultState>,
 }
 
 #[derive(Accounts)]
 pub struct Minters<'info> {
     #[account(mut)]
-    pub mint_state: Account<'info, MintState>,
-    #[account(signer)]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
     pub caller: Signer<'info>,
 }
 
 #[derive(Accounts)]
 pub struct Redeemers<'info> {
     #[account(mut)]
-    pub mint_state: Account<'info, MintState>,
-    #[account(signer)]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
     pub caller: Signer<'info>,
 }
 
 #[derive(Accounts)]
 pub struct Managers<'info> {
     #[account(mut)]
-    pub mint_state: Account<'info, MintState>,
-    #[account(signer)]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
     pub caller: Signer<'info>,
 }
 
 #[derive(Accounts)]
 pub struct TransferAdmin<'info> {
     #[account(mut)]
-    pub mint_state: Account<'info, MintState>,
-    #[account(signer)]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
     pub caller: Signer<'info>,
 }
 
 #[derive(Accounts)]
 pub struct SetMaxMintPerBlock<'info> {
     #[account(mut)]
-    pub mint_state: Account<'info, MintState>,
-    #[account(signer)]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
     pub caller: Signer<'info>,
 }
 
 #[derive(Accounts)]
 pub struct SetMaxRedeemPerBlock<'info> {
     #[account(mut)]
-    pub mint_state: Account<'info, MintState>,
-    #[account(signer)]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
     pub caller: Signer<'info>,
 }
 
-#[derive(Accounts)]
-pub struct InitializeMintState<'info> {
-    #[account(init, payer = admin, space = 1024, seeds = [b"mintstate"], bump)]
-    pub mint_state: Account<'info, MintState>,
-    #[account(mut, signer)]
-    pub admin: Signer<'info>,
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Debug)]
-struct TokenMetadata {
-    ticker: String,
-    name: String,
-    address: Pubkey,
-}
-
 #[event]
-pub struct TransferEvent {
-    from: Pubkey,
-    to: Pubkey,
-    amt: u64,
+pub struct AssetAddedEvent {
+    who: Pubkey,
+    asset: Pubkey,
 }
 
 #[event]
@@ -544,9 +607,45 @@ pub struct RedeemEvent {
 }
 
 #[event]
+pub struct NewMinterEvent {
+    new_minter: Pubkey,
+    added_by: Pubkey,
+}
+
+#[event]
+pub struct MinterRemovedEvent {
+    removed: Pubkey,
+    removed_by: Pubkey,
+}
+
+#[event]
+pub struct NewRedeemerEvent {
+    new_redeemer: Pubkey,
+    added_by: Pubkey,
+}
+
+#[event]
+pub struct RedeemerRemovedEvent {
+    removed: Pubkey,
+    removed_by: Pubkey,
+}
+
+#[event]
 pub struct NewManagerEvent {
     new_manager: Pubkey,
     added_by: Pubkey,
+}
+
+#[event]
+pub struct ManagerRemovedEvent {
+    removed: Pubkey,
+    removed_by: Pubkey,
+}
+
+#[event]
+pub struct AdminTransferEvent{
+    old_admin: Pubkey,
+    new_admin: Pubkey,
 }
 
 #[error_code]
