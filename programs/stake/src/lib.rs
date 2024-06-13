@@ -107,6 +107,7 @@ pub mod stake {
             ctx.accounts.token_program.to_account_info(),
             transfer_instruction,
         );
+
         token::transfer(cpi_ctx, amt)?;
 
         // Mint tokens to depositer
@@ -165,7 +166,7 @@ pub mod stake {
         let user_data = &mut ctx.accounts.user_data;
 
         // Calculate user yields
-        let yields = user_data.deposits * state.reward_per_deposit / VAULT_TOKEN_SCALAR - user_data.reward_tally;
+        let yields = user_data.deposits * state.reward_per_deposit / VAULT_TOKEN_SCALAR - (user_data.reward_tally);
 
         // Burn staked tokens that caller redeemed
         let burn_instruction = Burn {
@@ -178,6 +179,7 @@ pub mod stake {
             ctx.accounts.token_program.to_account_info(),
             burn_instruction,
         );
+
         token::burn(cpi_ctx, deposits)?;
 
         // Transfer token to caller
@@ -203,7 +205,7 @@ pub mod stake {
 
         // Clear deposits that were unstaked and update user reward tally and deposits
         user_data.cooldowns.retain(|&(cd, _)| cd >= time);
-        user_data.reward_tally = user_data.deposits * state.reward_per_deposit;
+        user_data.reward_tally = deposits * state.reward_per_deposit;
         user_data.reward_tally -= state.reward_per_deposit * deposits / VAULT_TOKEN_SCALAR;
         user_data.deposits -= deposits;
 
@@ -318,16 +320,15 @@ pub fn distribute(state: &mut VaultState) -> Result<u64> {
     let time = Clock::get()?.unix_timestamp as u64;
     let time_passed = time - state.last_distribution_time;
 
-    let scalar = 1000000000 as u64; // 10^9
-    let mut percentage = scalar;
+    let mut percentage = VAULT_TOKEN_SCALAR;
 
     // Get the percentage of 8 hours passed since last distribution
     // If greater than 8 hours, percentage = 100%
     if time_passed < (8 * 60 * 60) {
-        percentage = (scalar * time_passed) / (8 * 60 * 60);
+        percentage = (VAULT_TOKEN_SCALAR * time_passed) / (8 * 60 * 60);
     }
 
-    let amt = (state.last_distribution_amt * percentage) / scalar;
+    let amt = (state.last_distribution_amt * percentage) / VAULT_TOKEN_SCALAR;
 
     state.last_distribution_amt -= amt;
     state.reward_per_deposit += amt * VAULT_TOKEN_SCALAR / state.total_deposits;

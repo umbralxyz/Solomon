@@ -173,6 +173,8 @@ describe("stake", () => {
     callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
     const stakedBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
 
+    await sleep(1000 * (newCD));
+
     // Unstake as user before CD
     await program.methods.unstake(salt).accounts({
       userDepositTokenAccount: userUnstaked,
