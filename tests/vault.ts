@@ -102,7 +102,7 @@ describe("vault", () => {
       await program.provider.connection.getParsedAccountInfo(vaultMint)
     );
 
-    const mintAmount = 1000000000000000;
+    const mintAmount = 10000000000;
 
     vaultCollat = await getAssociatedTokenAddress(userTokenMintKey.publicKey, vaultAuthority.publicKey);
     userCollat = await getAssociatedTokenAddress(userTokenMintKey.publicKey, depositer.publicKey);
@@ -119,7 +119,7 @@ describe("vault", () => {
         lamports,
       }),
       // Create collat mint account that is controlled by anchor wallet
-      createInitializeMintInstruction(userTokenMintKey.publicKey, 0, key, key),
+      createInitializeMintInstruction(userTokenMintKey.publicKey, 9, key, key),
       // Create the ATA account that is associated with collat mint on anchor wallet
       createAssociatedTokenAccountInstruction(key, userCollat, depositer.publicKey, userTokenMintKey.publicKey),
     );
@@ -153,8 +153,8 @@ describe("vault", () => {
   
   it("Add asset, deposit, redeem", async () => {
     const assetKey = TOKEN_PROGRAM_ID;
-    const depositRate = new anchor.BN(1);
-    const redeemRate = new anchor.BN(1);
+    const depositRate = new anchor.BN(1000000000);
+    const redeemRate = new anchor.BN(1000000000);
 
     // Add asset
     const addAssetTx = await program.methods.addAsset(userTokenMintKey.publicKey, depositRate, redeemRate).accounts({
@@ -177,8 +177,8 @@ describe("vault", () => {
     }).rpc()
     console.log("Whitelisted redeemer: ", adminKey);
 
-    const deposit = new anchor.BN(100000000000000);
-    const redeem = new anchor.BN(1000000);
+    const deposit = new anchor.BN(1000000000);
+    const redeem = new anchor.BN(500000000);
     
     console.log("Caller collat mint: ", userCollat)
     // Get user balances before deposit

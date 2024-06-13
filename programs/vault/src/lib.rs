@@ -77,7 +77,7 @@ pub mod vault {
     pub fn deposit(ctx: Context<Deposit>, collat: u64) -> Result<()> {
         let state = &ctx.accounts.vault_state;
         let rate = ctx.accounts.exchange_rate.deposit_rate;
-        let amt = collat * rate; // / DECIMALS_SCALAR; TODO get decimals from context
+        let amt = collat * rate / DECIMALS_SCALAR; 
 
         let approved_minters = &state.approved_minters;
         if !approved_minters.contains(&ctx.accounts.minter.key()) {

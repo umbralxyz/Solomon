@@ -47,7 +47,7 @@ pub mod stake {
     ) -> Result<()> {
         ctx.accounts.vault_state.max_cooldown = max_cooldown;
         ctx.accounts.vault_state.cooldown = max_cooldown;
-        ctx.accounts.vault_state.min_shares = 1; // TODO determine amount to put here
+        ctx.accounts.vault_state.min_shares = 1; // TODO determine appropriate minimum
         ctx.accounts.vault_state.total_deposits = 0;
         ctx.accounts.vault_state.reward_per_deposit = 0;
         ctx.accounts.vault_state.deposit_token = ctx.accounts.deposit_token.key();
