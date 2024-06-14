@@ -14,8 +14,10 @@ pub struct VaultState {
     pub vault_token_mint: Pubkey,
     pub approved_minters: Vec<Pubkey>,
     pub approved_redeemers: Vec<Pubkey>,
-    pub managers: Vec<Pubkey>,
+    pub asset_managers: Vec<Pubkey>,
+    pub withdraw_addresses: Vec<Pubkey>,
     pub admin: Pubkey,
+    pub role_manager: Pubkey,
     pub bump: u8,
 }
 
@@ -37,10 +39,13 @@ pub mod vault {
     pub fn initialize_vault_state(
         ctx: Context<InitializeVaultState>,
         admin: Pubkey,
+        role_manager: Pubkey,
     ) -> Result<()> {
         ctx.accounts.vault_state.approved_minters = vec![admin];
         ctx.accounts.vault_state.approved_redeemers = vec![admin];
+        ctx.accounts.vault_state.asset_managers = vec![admin];
         ctx.accounts.vault_state.admin = admin;
+        ctx.accounts.vault_state.role_manager = role_manager;
         ctx.accounts.vault_state.vault_token_mint = ctx.accounts.vault_token.key();
         ctx.accounts.vault_state.bump = ctx.bumps.vault_state;
 
@@ -70,9 +75,51 @@ pub mod vault {
         Ok(())
     }
 
+    pub fn remove_asset(ctx: Context<RemoveAsset>, asset: Pubkey) -> Result<()> {
+        if ctx.accounts.authority.key() != ctx.accounts.vault_state.admin {
+            return Err(MintError::NotAdmin.into());
+        }
+
+        ctx.accounts.exchange_rate.deposit_rate = 0;
+
+        emit!(AssetAddedEvent{
+            who: ctx.accounts.authority.key(),
+            asset: asset,
+        });
+
+        Ok(())
+    }
+
+    // Pass 0 as a rate if you do not want to change a rate
+    pub fn set_rates(
+        ctx: Context<SetRate>,
+        asset: Pubkey,
+        deposit_rate: u64,
+        redeem_rate: u64,
+    ) -> Result<()> {
+        if ctx.accounts.authority.key() != ctx.accounts.vault_state.admin {
+            return Err(MintError::NotAdmin.into());
+        }
+
+        if deposit_rate != 0 {ctx.accounts.exchange_rate.deposit_rate = deposit_rate;}
+        if redeem_rate != 0 {ctx.accounts.exchange_rate.redeem_rate = redeem_rate;}
+
+        emit!(RateChangeEvent{
+            who: ctx.accounts.authority.key(),
+            asset: asset,
+        });
+
+        Ok(())
+    }
+
     pub fn deposit(ctx: Context<Deposit>, collat: u64) -> Result<()> {
         let state = &ctx.accounts.vault_state;
         let rate = ctx.accounts.exchange_rate.deposit_rate;
+
+        if rate == 0 {
+            return Err(MintError::AssetNotSupported.into());
+        }
+
         let amt = collat * rate / DECIMALS_SCALAR; 
 
         let approved_minters = &state.approved_minters;
@@ -167,14 +214,19 @@ pub mod vault {
 
     pub fn withdraw(ctx: Context<Withdraw>, amt: u64) -> Result<()> {
         let caller = &ctx.accounts.caller.key();
-        if !ctx.accounts.vault_state.managers.contains(caller) {
-            return Err(MintError::NotManager.into());
+        if !ctx.accounts.vault_state.asset_managers.contains(caller) {
+            return Err(MintError::NotAssetManager.into());
+        }
+
+        let address = &ctx.accounts.destination.key();
+        if !ctx.accounts.vault_state.withdraw_addresses.contains(address) {
+            return Err(MintError::NotApprovedAddress.into());
         }
 
         // Transfer collateral
         let transfer_instruction = Transfer {
             from: ctx.accounts.program_collat.to_account_info(),
-            to: ctx.accounts.caller.to_account_info(),
+            to: ctx.accounts.destination.to_account_info(),
             authority: ctx.accounts.vault_state.to_account_info(),
         };
 
@@ -197,8 +249,10 @@ pub mod vault {
     }
 
     pub fn whitelist_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
-            return Err(MintError::NotAdmin.into());
+        let role_manager = &ctx.accounts.vault_state.role_manager;
+
+        if !(&ctx.accounts.caller.key() == role_manager) {
+            return Err(MintError::NotRoleManager.into());
         }
 
         let approved_minters = &mut ctx.accounts.vault_state.approved_minters;
@@ -218,8 +272,10 @@ pub mod vault {
     }
 
     pub fn remove_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
-            return Err(MintError::NotAdmin.into());
+        let asset_managers = &ctx.accounts.vault_state.asset_managers;
+
+        if !asset_managers.contains(&ctx.accounts.caller.key()) {
+            return Err(MintError::NotRoleManager.into());
         }
 
         let approved_minters = &mut ctx.accounts.vault_state.approved_minters;
@@ -239,8 +295,10 @@ pub mod vault {
     }
 
     pub fn whitelist_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
-            return Err(MintError::NotAdmin.into());
+        let asset_managers = &ctx.accounts.vault_state.asset_managers;
+
+        if !asset_managers.contains(&ctx.accounts.caller.key()) {
+            return Err(MintError::NotRoleManager.into());
         }
 
         let approved_redeemers = &mut ctx.accounts.vault_state.approved_redeemers;
@@ -260,8 +318,10 @@ pub mod vault {
     }
 
     pub fn remove_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
-            return Err(MintError::NotAdmin.into());
+        let asset_managers = &ctx.accounts.vault_state.asset_managers;
+
+        if !asset_managers.contains(&ctx.accounts.caller.key()) {
+            return Err(MintError::NotRoleManager.into());
         }
 
         let approved_redeemers = &mut ctx.accounts.vault_state.approved_redeemers;
@@ -280,45 +340,83 @@ pub mod vault {
         Ok(())
     }
 
-    pub fn add_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
+    pub fn add_asset_manager(ctx: Context<Managers>, asset_manager: Pubkey) -> Result<()> {
         let caller = ctx.accounts.caller.key();
 
         if caller != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
         }
 
-        let managers = &mut ctx.accounts.vault_state.managers;
+        let asset_managers = &mut ctx.accounts.vault_state.asset_managers;
 
-        if !managers.contains(&manager) {
-            managers.push(manager);
+        if !asset_managers.contains(&asset_manager) {
+            asset_managers.push(asset_manager);
         } else {
             return Err(MintError::AlreadyManager.into());
         }
 
         emit!(NewManagerEvent {
-            new_manager: manager,
+            new_manager: asset_manager,
             added_by: caller,
         });
 
         Ok(())
     }
 
-    pub fn remove_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
+    pub fn remove_asset_manager(ctx: Context<Managers>, asset_manager: Pubkey) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
         }
 
-        let managers = &mut ctx.accounts.vault_state.managers;
+        let asset_managers = &mut ctx.accounts.vault_state.asset_managers;
 
-        if let Some(i) = managers.iter().position(|&x| x == manager) {
-            managers.swap_remove(i);
+        if let Some(i) = asset_managers.iter().position(|&x| x == asset_manager) {
+            asset_managers.swap_remove(i);
         } else {
             return Err(MintError::NotManagerYet.into());
         }
 
         emit!(ManagerRemovedEvent{
-            removed: manager,
+            removed: asset_manager,
             removed_by: ctx.accounts.caller.key(),
+        });
+
+        Ok(())
+    }
+
+    pub fn set_role_manager(ctx: Context<Managers>, new_manager: Pubkey) -> Result<()> {
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
+            return Err(MintError::NotAdmin.into());
+        }
+
+        ctx.accounts.vault_state.role_manager = new_manager;
+
+        emit!(RoleManagerChangeEvent{
+            new_manager: new_manager,
+            changed_by: ctx.accounts.caller.key(),
+        });
+
+        Ok(())
+    }
+
+    pub fn add_withdraw_address(ctx: Context<WithdrawAddress>, address: Pubkey) -> Result<()> {
+        let caller = ctx.accounts.caller.key();
+
+        if caller != ctx.accounts.vault_state.admin {
+            return Err(MintError::NotAdmin.into());
+        }
+
+        let withdraw_addresses = &mut ctx.accounts.vault_state.withdraw_addresses;
+
+        if !withdraw_addresses.contains(&address) {
+            withdraw_addresses.push(address);
+        } else {
+            return Err(MintError::AlreadyManager.into());
+        }
+
+        emit!(NewWithdrawAddressEvent {
+            new_address: address,
+            added_by: caller,
         });
 
         Ok(())
@@ -400,6 +498,44 @@ pub struct AddAsset<'info> {
     #[account(mut)]
     pub collateral_token_mint: Account<'info, Mint>,
 
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(asset: Pubkey)]
+pub struct RemoveAsset<'info> {
+    #[account(
+        mut,
+        seeds = [EXCHANGE_RATE_SEED, asset.as_ref()],
+        bump
+    )]
+    pub exchange_rate: Account<'info, ExchangeRate>,
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(asset: Pubkey)]
+pub struct SetRate<'info> {
+    #[account(
+        mut,
+        seeds = [EXCHANGE_RATE_SEED, asset.as_ref()],
+        bump
+    )]
+    pub exchange_rate: Account<'info, ExchangeRate>,
     #[account(
         mut,
         seeds = [VAULT_STATE_SEED],
@@ -531,7 +667,7 @@ pub struct Withdraw<'info> {
     pub program_collat: Account<'info, TokenAccount>,
 
     #[account(mut)]
-    pub caller: Account<'info, TokenAccount>,
+    pub destination: Account<'info, TokenAccount>,
     #[account(mut)]
     pub collat_mint: Account<'info, Mint>,
     #[account(
@@ -540,6 +676,8 @@ pub struct Withdraw<'info> {
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub caller: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -579,6 +717,18 @@ pub struct Managers<'info> {
 }
 
 #[derive(Accounts)]
+pub struct WithdrawAddress<'info> {
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub caller: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct TransferAdmin<'info> {
     #[account(
         mut,
@@ -592,6 +742,18 @@ pub struct TransferAdmin<'info> {
 
 #[event]
 pub struct AssetAddedEvent {
+    who: Pubkey,
+    asset: Pubkey,
+}
+
+#[event]
+pub struct AssetRemovedEvent {
+    who: Pubkey,
+    asset: Pubkey,
+}
+
+#[event]
+pub struct RateChangeEvent{
     who: Pubkey,
     asset: Pubkey,
 }
@@ -656,16 +818,32 @@ pub struct AdminTransferEvent{
     new_admin: Pubkey,
 }
 
+#[event]
+pub struct NewWithdrawAddressEvent {
+    new_address: Pubkey,
+    added_by: Pubkey,
+}
+
+#[event]
+pub struct RoleManagerChangeEvent{
+    new_manager: Pubkey,
+    changed_by: Pubkey,
+}
+
 #[error_code]
 pub enum MintError {
     #[msg("The provided account is not an approved minter")]
     NotAnApprovedMinter,
     #[msg("The provided account is not an approved redeemer")]
     NotAnApprovedRedeemer,
-    #[msg("The caller is not a manager")]
-    NotManager,
+    #[msg("The caller is not an asset manager")]
+    NotAssetManager,
+    #[msg("The caller is not a role manager")]
+    NotRoleManager,
     #[msg("The caller is not an admin")]
     NotAdmin,
+    #[msg("The provided token account is not an approved withdraw address")]
+    NotApprovedAddress,
     #[msg("The minter is already whitelisted")]
     AlreadyMinter,
     #[msg("The redeemer is already whitelisted")]

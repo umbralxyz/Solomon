@@ -53,10 +53,14 @@ describe("vault", () => {
     await anchor.AnchorProvider.env().connection.requestAirdrop(vaultAuthority.publicKey, 2 * anchor.web3.LAMPORTS_PER_SOL);
 
     // Initialize vault_state and vault_token
-    await program.methods.initializeVaultState(adminKey).accounts({
+    await program.methods.initializeVaultState(adminKey, depositer.publicKey).accounts({
       signer: adminKey,
     }).rpc();
     console.log("Admin: ", adminKey.toString());
+
+    // Change role manager from depositer to admin
+    await program.methods.setRoleManager(adminKey).rpc();
+    console.log("Set role manager to: ", adminKey.toString());
 
     // Remove admin from whitelisted minters / redeemers (added by default)
     await program.methods.removeMinter(adminKey).rpc();
@@ -88,11 +92,6 @@ describe("vault", () => {
     );
 
     await anchor.AnchorProvider.env().sendAndConfirm(ataTx, []);
-
-    console.log(
-      await program.provider.connection.getParsedAccountInfo(vaultMint)
-    );
-
     const mintAmount = 10000000000;
 
     vaultCollat = await getAssociatedTokenAddress(userTokenMintKey.publicKey, vaultAuthority.publicKey);
@@ -116,7 +115,6 @@ describe("vault", () => {
     );
 
     await anchor.AnchorProvider.env().sendAndConfirm(userTokenMintTx, [userTokenMintKey]);
-
     console.log("Collat Mint key: ", userTokenMintKey.publicKey.toString());
     
     const createVaultsTx = new anchor.web3.Transaction().add(
@@ -152,8 +150,6 @@ describe("vault", () => {
       authority: adminKey,
       collateralTokenMint: userTokenMintKey.publicKey,
     }).rpc();
-
-    console.log("Add asset signature: ", addAssetTx);
     console.log("Asset added: ", assetKey.toString());
 
     // Whitelist depositer as minter and redeemer
@@ -181,12 +177,15 @@ describe("vault", () => {
       collateralTokenMint: userTokenMintKey.publicKey,
     }).signers([depositer]).rpc().catch(e => console.error(e));
     
-
     // Get user balances after deposit
     callerInfo = await program.provider.connection.getParsedAccountInfo(userVaultToken);
     const vaultTokensAfterDeposit = callerInfo.value.data.parsed.info.tokenAmount.amount;
     callerInfo = await program.provider.connection.getParsedAccountInfo(userCollat);
     const collatTokensAfterDeposit = callerInfo.value.data.parsed.info.tokenAmount.amount;
+
+    // Set redemption rate
+    const newRedeemRate = new anchor.BN(1500000000);
+    await program.methods.setRates(userTokenMintKey.publicKey, new anchor.BN(0), newRedeemRate).rpc();
 
     // Redeem as user
     const redeemTx = await program.methods.redeem(redeem).accounts({
@@ -224,18 +223,21 @@ describe("vault", () => {
     const amt = new anchor.BN(40000);
     
     // Add manager
-    await program.methods.addManager(withdrawerCollat).rpc();
+    await program.methods.addAssetManager(withdrawer.publicKey).rpc();
+    console.log("Added manager: ", withdrawer.publicKey.toString());
 
-    console.log("Added manager: ", withdrawerCollat.toString());
+    await program.methods.addWithdrawAddress(withdrawerCollat).rpc();
+    console.log("Added withdraw address: ", withdrawerCollat.toString());
 
     let callerInfo = await program.provider.connection.getParsedAccountInfo(withdrawerCollat);
     const withdrawerBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
     
     // Withdraw
     const withdrawTx = await program.methods.withdraw(amt).accounts({
-      caller: withdrawerCollat,
+      caller: withdrawer.publicKey,
+      destination: withdrawerCollat,
       collatMint: userTokenMintKey.publicKey,
-    }).signers([]).rpc();
+    }).signers([withdrawer]).rpc().catch(e => console.error(e));
     
     callerInfo = await program.provider.connection.getParsedAccountInfo(withdrawerCollat);
     const withdrawerAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
@@ -243,13 +245,12 @@ describe("vault", () => {
     console.log("Withdrawer collat tokens before withdraw: ", withdrawerBefore);
     console.log("Withdrawer collat tokens after withdraw: ", withdrawerAfter);
 
-    // Add manager
-    await program.methods.removeManager(withdrawerCollat).rpc();
-
-    console.log("Removed manager: ", withdrawerCollat.toString());
+    // Remove manager
+    await program.methods.removeAssetManager(withdrawer.publicKey).rpc();
+    console.log("Removed manager: ", withdrawer.publicKey.toString());
   });
 
-  it("Transfer admin back and forth", async () => {
+  it("Transfer admin back and forth, remove asset", async () => {
     await program.methods.transferAdmin(depositer.publicKey).rpc()
     console.log("Transfered admin to: ", depositer.publicKey.toString());
 
@@ -257,5 +258,8 @@ describe("vault", () => {
       caller: depositer.publicKey,
     }).signers([depositer]).rpc();
     console.log("Transfered admin back to: ", adminKey.toString());
+
+    await program.methods.removeAsset(userTokenMintKey.publicKey).rpc();
+    console.log("Removed asset: ", userTokenMintKey.publicKey.toString());
   });
  });
