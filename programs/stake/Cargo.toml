@@ -17,5 +17,5 @@ no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
-anchor-lang = { version = "0.30.0", features = ["init-if-needed", "idl-build"] }
+anchor-lang = { version = "0.30.0", features = ["init-if-needed", "idl-build", "anchor-lang-idl"] }
 anchor-spl = { version = "0.30.0", features = ["idl-build"] }

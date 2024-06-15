@@ -1,0 +1,293 @@
+use anchor_lang::prelude::*;
+use anchor_spl::token::{Mint, Token, TokenAccount, Transfer, MintTo, Burn};
+use super::*;
+
+#[derive(Accounts)]
+#[instruction(admin: Pubkey, salt: [u8; 8])]
+pub struct InitializeVaultState<'info> {
+    /// The vault state for this deposit token and admin
+    #[account(
+        init, 
+        payer = caller, 
+        // todo check space
+        space = 1024, 
+        seeds = [VAULT_STATE_SEED, salt.as_ref()], 
+        bump
+    )]
+    pub vault_state: Box<Account<'info, VaultState>>,
+
+    #[account(mut)]
+    pub deposit_token: Box<Account<'info, Mint>>,
+    #[account(mut)]
+    pub caller: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(salt: [u8; 8])]
+pub struct InitializeProgramAccounts<'info> {
+    /// The vault state for this deposit token and admin
+    #[account(
+        seeds = [VAULT_STATE_SEED, salt.as_ref()],
+        bump
+    )]
+    pub vault_state: Box<Account<'info, VaultState>>,
+
+    #[account(
+        init,
+        payer = caller,
+        seeds = [STAKING_TOKEN_SEED, vault_state.key().as_ref()],
+        mint::decimals = deposit_token.decimals + vault_state.offset,
+        mint::authority = vault_state,
+        bump
+    )]
+    pub staking_token: Box<Account<'info, Mint>>,
+
+    /// The deposit token ATA for this vault and admin
+    #[account(
+        init, 
+        payer = caller, 
+        seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.key().as_ref()],
+        token::mint = deposit_token,
+        token::authority = vault_state,
+        bump
+    )]
+    pub vault_token_account: Box<Account<'info, TokenAccount>>,
+    #[account(mut)]
+    pub deposit_token: Box<Account<'info, Mint>>,
+    #[account(mut)]
+    pub caller: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(salt: [u8; 8])]
+pub struct InitializeUserAccount<'info> {
+    #[account(
+        seeds = [VAULT_STATE_SEED, salt.as_ref()], 
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+
+    #[account(
+        init, 
+        payer = user, 
+        space = 8 + 8 + 32 + (8 * 10), 
+        seeds = [USER_DATA_SEED, user.key().as_ref(), vault_state.key().as_ref()], 
+        bump
+    )]
+    pub user_data: Account<'info, UserPDA>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(salt: [u8; 8], amt: u64)]
+pub struct Stake<'info> {
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED, salt.as_ref()], 
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(
+        mut,
+        seeds = [STAKING_TOKEN_SEED, vault_state.key().as_ref()],
+        bump
+    )]
+    pub staking_token: Account<'info, Mint>,
+    #[account(
+        mut,
+        seeds = [USER_DATA_SEED, user.key().as_ref(), vault_state.key().as_ref()], 
+        bump
+    )]
+    pub user_data: Account<'info, UserPDA>,
+    /// THe user deposit token account, were going to transfer from this
+    #[account(
+        mut,
+        token::mint = vault_state.deposit_token,
+        token::authority = user,
+    )]
+    pub user_deposit_token_account: Account<'info, TokenAccount>,
+    /// The users staking token account, were going to mint to this
+    #[account(
+        mut,
+        token::mint = staking_token,
+        token::authority = user,
+    )]
+    pub user_staking_token_account: Account<'info, TokenAccount>,
+    /// The vaults ATA for the deposit token
+    #[account(
+        mut,
+        seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.key().as_ref()],
+        bump
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub token_program: Program<'info, Token>,
+}
+
+impl<'info> Stake<'info> {
+    pub fn transfer_from_user_to_vault(
+        &self,
+        amount: u64,
+    ) -> Result<()> {
+        let cpi_accounts = Transfer {
+            from: self.user_deposit_token_account.to_account_info(),
+            to: self.vault_token_account.to_account_info(),
+            authority: self.user.to_account_info(),
+        };
+
+        let cpi_program = self.token_program.to_account_info();
+        let cpi = CpiContext::new(cpi_program, cpi_accounts);
+        token::transfer(cpi, amount)
+    }
+
+    pub fn mint_tokens_to_user(
+        &self,
+        salt: &[u8; 8],
+        amount: u64,
+    ) -> Result<()> {
+        // Mint tokens to depositer
+        let cpi_accounts = MintTo {
+            mint: self.staking_token.to_account_info(),
+            to: self.user_staking_token_account.to_account_info(),
+            authority: self.vault_state.to_account_info(),
+        };
+
+        let seeds: &[&[u8]] = &[VAULT_STATE_SEED, salt, &[self.vault_state.bump]];
+        let seeds = &[seeds][..];
+        let cpi_ctx = CpiContext::new_with_signer(
+            self.token_program.to_account_info(),
+            cpi_accounts,
+            seeds,
+        );
+
+        token::mint_to(cpi_ctx, amount)
+    }
+}
+
+#[derive(Accounts)]
+#[instruction(salt: [u8; 8])]
+pub struct Unstake<'info> {
+    pub token_program: Program<'info, Token>,
+
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED, salt.as_ref()], 
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+
+    #[account(
+        mut,
+        seeds = [STAKING_TOKEN_SEED, vault_state.key().as_ref()],
+        bump
+    )]
+    pub staking_token: Account<'info, Mint>,
+
+    #[account(
+        mut,
+        seeds = [USER_DATA_SEED, user.key().as_ref(), vault_state.key().as_ref()], 
+        bump
+    )]
+    pub user_data: Account<'info, UserPDA>,
+
+    #[account(
+        mut,
+        token::mint = staking_token,
+        token::authority = user,
+    )]
+    pub user_staking_token_account: Account<'info, TokenAccount>,
+
+    /// The user deposit account were going to send collateral too
+    #[account(
+        mut,
+        token::mint = vault_state.deposit_token,
+        token::authority = user,
+    )]
+    pub user_deposit_token_account: Account<'info, TokenAccount>,
+
+    /// The vaults ATA for the deposit token
+    #[account(
+        mut,
+        seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.key().as_ref()],
+        bump
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+}
+
+impl<'info> Unstake<'info> {
+    pub fn transfer_from_vault_to_user(
+        &self,
+        salt: &[u8; 8],
+        amount: u64,
+    ) -> Result<()> {
+         let accounts = Transfer {
+            from: self.vault_token_account.to_account_info(),
+            to: self.user_deposit_token_account.to_account_info(),
+            authority: self.vault_state.to_account_info(),
+        };
+
+        let seeds: &[&[u8]] = &[VAULT_STATE_SEED, salt.as_ref(), &[self.vault_state.bump]];
+        let seeds = &[seeds][..];
+        let cpi_ctx = CpiContext::new_with_signer(
+            self.token_program.to_account_info(),
+            accounts,
+            seeds,
+        );
+
+        token::transfer(cpi_ctx, amount)
+    }
+
+    pub fn burn_tokens_from_user(
+        &self,
+        amount: u64,
+    ) -> Result<()> {
+        let burn_instruction = Burn {
+            mint: self.staking_token.to_account_info(),
+            from: self.user_staking_token_account.to_account_info(),
+            authority: self.user.to_account_info(),
+        };
+
+        let cpi_ctx = CpiContext::new(
+            self.token_program.to_account_info(),
+            burn_instruction,
+        );
+
+        token::burn(cpi_ctx, amount)
+    }
+}
+
+#[derive(Accounts)]
+#[instruction(duration: u64, salt: [u8; 8])]
+pub struct SetCooldownDuration<'info> {
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED, salt.as_ref()], 
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub caller: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(new_admin: Pubkey, salt: [u8; 8])]
+pub struct TransferAdmin<'info> {
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED, salt.as_ref()], 
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub caller: Signer<'info>,
+}
