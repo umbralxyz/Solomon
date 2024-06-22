@@ -3,7 +3,7 @@ use anchor_spl::token::{Mint, Token, TokenAccount, Transfer, MintTo, Burn};
 use super::*;
 
 #[derive(Accounts)]
-#[instruction(admin: Pubkey, salt: [u8; 8], offset: u8, cooldown: u64)]
+#[instruction(admin: Pubkey, salt: [u8; 8], offset: u8, cooldown: u32)]
 pub struct InitializeVaultState<'info> {
     /// The vault state for this deposit token and admin
     #[account(
@@ -210,7 +210,7 @@ pub struct Unstake<'info> {
     #[account(
         init_if_needed, 
         payer = user, 
-        space = 32 + 8 + 8, 
+        space = 8 + 8 + 10 * 96, 
         seeds = [USER_DATA_SEED, user.key().as_ref(), vault_state.key().as_ref()], 
         bump
     )]
@@ -295,7 +295,7 @@ pub struct Reward<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(salt: [u8; 8], duration: u64)]
+#[instruction(salt: [u8; 8], duration: u32)]
 pub struct SetCooldown<'info> {
     #[account(
         mut,
@@ -308,7 +308,7 @@ pub struct SetCooldown<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(salt: [u8; 8], duration: u64)]
+#[instruction(salt: [u8; 8], duration: u32)]
 pub struct SetVestingPeriod<'info> {
     #[account(
         mut,

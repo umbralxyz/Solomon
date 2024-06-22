@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 mod context;
@@ -12,8 +14,8 @@ const VAULT_STATE_SEED: &[u8] = b"vault-state";
 
 #[account]
 pub struct UserPDA {
-    pub user: Pubkey,
-    pub cooldown_end: u64,
+    pub assets_available: u64,
+    pub unstake_queue: VecDeque<(u32, u64)>,
 }
 
 #[account]
@@ -21,11 +23,11 @@ pub struct VaultState {
     pub admin: Pubkey,
     pub bump: u8,
     pub deposit_token: Pubkey,
-    pub cooldown: u64,
+    pub cooldown: u32,
     pub vesting_amount: u64,
-    pub last_distribution_time: u64,
+    pub last_distribution_time: u32,
     pub total_assets: u64,
-    pub vesting_period: u64,
+    pub vesting_period: u32,
 
     /// See [`https://blog.openzeppelin.com/a-novel-defense-against-erc4626-inflation-attacks`]
     pub offset: u8,
@@ -44,7 +46,7 @@ pub mod stake {
         admin: Pubkey,
         _salt: [u8; 8],
         offset: u8,
-        cooldown: u64,
+        cooldown: u32,
     ) -> Result<()> {
         // todo
         require!(offset < 9, StakeError::BadOffset);
@@ -77,7 +79,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn set_cooldown(ctx: Context<SetCooldown>, _salt: [u8; 8], duration: u64) -> Result<()> {
+    pub fn set_cooldown(ctx: Context<SetCooldown>, _salt: [u8; 8], duration: u32) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(StakeError::NotAdmin.into());
         }
@@ -87,7 +89,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn set_vesting_period(ctx: Context<SetVestingPeriod>, _salt: [u8; 8], duration: u64) -> Result<()> {
+    pub fn set_vesting_period(ctx: Context<SetVestingPeriod>, _salt: [u8; 8], duration: u32) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(StakeError::NotAdmin.into());
         }
@@ -185,7 +187,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn unstake(ctx: Context<Unstake>, salt: [u8; 8], shares: u64) -> Result<()> {
+    pub fn start_unstake(ctx: Context<Unstake>, _salt: [u8; 8], shares: u64) -> Result<()> {
         if ctx
             .accounts
             .vault_state
@@ -195,11 +197,11 @@ pub mod stake {
             return Err(StakeError::Blacklisted.into());
         }
 
-        let time = Clock::get()?.unix_timestamp as u64;
+        let cd = ctx.accounts.vault_state.cooldown;
 
-        if ctx.accounts.user_data.cooldown_end > time {
-            return Err(StakeError::TooSoon.into());
-        }
+        let time = Clock::get()?.unix_timestamp as u32;
+
+        let cd_end = time + cd;
 
         let assets = ctx.accounts.vault_state.convert_to_assets(
             shares,
@@ -207,13 +209,40 @@ pub mod stake {
         )?;
 
         ctx.accounts.burn_tokens_from_user(shares)?;
+        ctx.accounts.vault_state.total_assets -= assets;
+        ctx.accounts.user_data.unstake_queue.push_back((cd_end, assets));
+
+        emit!(StartUnstakeEvent {
+            who: ctx.accounts.user.key(),
+            shares,
+            assets,
+        });
+
+        Ok(())
+    }
+
+    pub fn unstake(ctx: Context<Unstake>, salt: [u8; 8], assets: u64) -> Result<()> {
+        if ctx
+            .accounts
+            .vault_state
+            .blacklist
+            .contains(&ctx.accounts.user.key())
+        {
+            return Err(StakeError::Blacklisted.into());
+        }
+
+        ctx.accounts.user_data.get_available_assets()?;
+        let assets_available = ctx.accounts.user_data.assets_available;
+
+        if assets > assets_available {
+            return Err(StakeError::AssetsUnavailable.into());
+        }
+
         ctx.accounts.transfer_from_vault_to_user(&salt, assets)?; 
-        let cd = ctx.accounts.vault_state.cooldown;
-        ctx.accounts.user_data.cooldown_end = time + cd;
+        ctx.accounts.user_data.assets_available -= assets;
 
         emit!(UnstakeEvent {
             who: ctx.accounts.user.key(),
-            shares,
             assets,
         });
 
@@ -226,7 +255,7 @@ pub mod stake {
             return Err(StakeError::NotRewarder.into());
         }
 
-        let time = Clock::get()?.unix_timestamp as u64;
+        let time = Clock::get()?.unix_timestamp as u32;
 
         // Transfer unstaked tokens to vault
         let transfer_instruction = Transfer {
@@ -256,20 +285,13 @@ pub mod stake {
 
 impl VaultState {
     pub fn convert_to_shares(&self, assets: u64, total_supply: u64) -> Result<u64>  {
-        // 1e9(total_supply) + 1eINTERNAL_OFFSET
-        let virtual_supply = total_supply + 10_u64.pow(self.offset as u32);
-    
-        // in terms of our decimals
-        // shares per asset deposit
-        // = 1e18(assets * supply) + 1e(9+INTERNAL_OFFSET)(assets)
-        let x = assets * virtual_supply;
-    
-        // supply / total_assets = shares per asset
-        // = 1e9(shares) + 1e(9+INTERNAL_OFFSET)(assets / total_assets)
+        if self.total_assets == 0 {
+            return Ok(assets);
+        }
+
         let total_assets = self.total_assets - self.get_unvested()?;
-        let x = x / (total_assets + 1);
+        let x = assets * total_supply / total_assets;
     
-        // = 1e9(shares) + 1e(INTERNAL_OFFSET)(assets / total_assets)
         Ok(x)
     }
     
@@ -279,26 +301,51 @@ impl VaultState {
         }
         
         let total_assets = self.total_assets - self.get_unvested()?;
-        let virtual_supply = total_supply + 10_u64.pow(self.offset as u32);
-        let x = shares * (total_assets + 1);
-        let x = x / virtual_supply;
+        let x = (shares * total_assets) / total_supply;
 
         Ok(x)
     }
 
     pub fn get_unvested(&self) -> Result<u64> {
-        let time = Clock::get()?.unix_timestamp as u64;
-        let time_passed = time - self.last_distribution_time;
+        let time = Clock::get()?.unix_timestamp as u32;
+        let time_passed = (time - self.last_distribution_time) as u64;
+        let vesting_period = self.vesting_period as u64;
     
-        // Get the percentage of 8 hours passed since last distribution
-        // If greater than 8 hours, percentage = 100%
-        if time_passed > self.vesting_period {
+        if time_passed > vesting_period {
             return Ok(0);
         }
 
-        let amt = ((self.vesting_period - time_passed) * self.vesting_amount) / self.vesting_period;
+        let amt = ((vesting_period - time_passed) * self.vesting_amount) / vesting_period;
 
         Ok(amt)
+    }
+}
+
+impl UserPDA {
+    pub fn new() -> Self {
+        Self {
+            assets_available: 0,
+            unstake_queue: VecDeque::with_capacity(10),
+        }
+    }
+
+    pub fn get_available_assets(&mut self) -> Result<u64> {
+        let time = Clock::get()?.unix_timestamp as u32;
+        
+        let mut uncooled = VecDeque::with_capacity(10);
+
+        // Iterate over unstake_queue and assets
+        while let Some((cd, assets)) = self.unstake_queue.pop_front() {
+            if time >= cd {
+                self.assets_available += assets;
+            } else {
+                uncooled.push_back((cd, assets));
+            }
+        }
+
+        self.unstake_queue = uncooled;
+
+        Ok(self.assets_available)
     }
 }
 
@@ -310,9 +357,15 @@ pub struct StakeEvent {
 }
 
 #[event]
-pub struct UnstakeEvent {
+pub struct StartUnstakeEvent {
     who: Pubkey,
     shares: u64,
+    assets: u64,
+}   
+
+#[event]
+pub struct UnstakeEvent {
+    who: Pubkey,
     assets: u64,
 }   
 
@@ -360,8 +413,8 @@ pub enum StakeError {
     UserNotFound,
     #[msg("That token is not available for staking")]
     WrongToken,
-    #[msg("The vault is below the minimum shares required for staking")]
-    MinSharesViolation,
+    #[msg("Insufficient assets available")]
+    AssetsUnavailable,
     #[msg("Bad Staking Token Decimals, they must be gte than the deposit token")]
     BadStakingTokenDecimals,
     #[msg("Offset too high")]

@@ -36,7 +36,8 @@ describe("stake", () => {
     [Buffer.from("staking-token"), vaultStatePDA.toBuffer()],
     program.programId
   );
-  const cd = new anchor.BN(3);
+  const cd = 1;
+  const vestingPeriod = 10;
   const offset = 8;
 
   before(async () => {
@@ -75,28 +76,21 @@ describe("stake", () => {
       // Create user two unstaked ATA
       createAssociatedTokenAccountInstruction(adminKey, userTwoUnstaked, userTwo.publicKey, unstakedMint.publicKey),
     );
-
     await anchor.AnchorProvider.env().sendAndConfirm(unstakedMintTx, [unstakedMint]);
 
-    const mintAmount = 100000;
-
     // Mint unstaked tokens to user
+    const mintAmount = 100000;
     const collatMintTx = new anchor.web3.Transaction().add(
       createMintToInstruction(unstakedMint.publicKey, userUnstaked, adminKey, mintAmount),
     );
-
     await anchor.AnchorProvider.env().sendAndConfirm(collatMintTx, []);
 
-    const depositerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
-    const userUnstakedBal = depositerInfo.value.data.parsed.info.tokenAmount.amount;
-
-    console.log("Admin: ", adminKey.toString());
-
     // Initialize staking vault and token accounts
-    await program.methods.initializeVaultState(adminKey, salt, offset, new anchor.BN(0)).accounts({
+    await program.methods.initializeVaultState(adminKey, salt, offset, 0).accounts({
       depositToken: unstakedMint.publicKey,
       caller: adminKey,
     }).rpc().catch(e => console.error(e));
+    console.log("Admin: ", adminKey.toString());
 
     await program.methods.initializeProgramAccounts(salt).accounts({
       depositToken: unstakedMint.publicKey,
@@ -108,7 +102,6 @@ describe("stake", () => {
     const initUserStaked = new anchor.web3.Transaction().add(
       createAssociatedTokenAccountInstruction(adminKey, userStaked, user.publicKey, stakingTokenPDA),
     );
-
     await anchor.AnchorProvider.env().sendAndConfirm(initUserStaked, []);
 
     // Initialize user two staked account
@@ -116,14 +109,13 @@ describe("stake", () => {
     const initUserTwoStaked = new anchor.web3.Transaction().add(
       createAssociatedTokenAccountInstruction(adminKey, userTwoStaked, userTwo.publicKey, stakingTokenPDA),
     );
-
     await anchor.AnchorProvider.env().sendAndConfirm(initUserTwoStaked, []);
 
     await program.methods.setCooldown(salt, cd).rpc();
     console.log("Set staking cooldown to: ", cd.toString());
 
-    await program.methods.setVestingPeriod(salt, new anchor.BN(1)).rpc();
-    console.log("Set vesting period to: ", cd.toString());
+    await program.methods.setVestingPeriod(salt, vestingPeriod).rpc();
+    console.log("Set vesting period to: ", vestingPeriod.toString());
   });
   
   
@@ -211,12 +203,22 @@ describe("stake", () => {
     const stakedBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
 
 
-    const unstake = new anchor.BN(stakedBefore / 2);
-    const unstakeTwo = new anchor.BN(stakedBefore / 4);
+
+    const unstake = new anchor.BN(50000);
+    const unstakeTwo = new anchor.BN(25000);
 
     //await sleep(1000 * (newCD));
 
     // Unstake half as user one
+    await program.methods.startUnstake(salt, unstake).accounts({
+      userDepositTokenAccount: userUnstaked,
+      userStakingTokenAccount: userStaked,
+      user: user.publicKey
+    }).signers([user]).rpc().catch(e => console.error(e));
+
+    // Should fail when commented out or removed
+    await sleep(1000 * (cd));
+
     await program.methods.unstake(salt, unstake).accounts({
       userDepositTokenAccount: userUnstaked,
       userStakingTokenAccount: userStaked,
@@ -231,7 +233,7 @@ describe("stake", () => {
 
     // Transfer other half to user two
     const transfer = new anchor.web3.Transaction().add(
-      createTransferInstruction(userStaked, userTwoStaked, user.publicKey, unstake.toNumber())
+      createTransferInstruction(userStaked, userTwoStaked, user.publicKey, unstakedAfter)
     );
     await anchor.AnchorProvider.env().sendAndConfirm(transfer, [user]);
 
@@ -241,9 +243,16 @@ describe("stake", () => {
     callerInfo = await program.provider.connection.getParsedAccountInfo(userTwoStaked);
     const stakedTwoBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
 
-    //await sleep(1000 * (newCD));
-
     // Unstake some as user two
+    await program.methods.startUnstake(salt, unstakeTwo).accounts({
+      userDepositTokenAccount: userTwoUnstaked,
+      userStakingTokenAccount: userTwoStaked,
+      user: userTwo.publicKey
+    }).signers([userTwo]).rpc().catch(e => console.error(e));
+
+    // Should fail when commented out or removed
+    await sleep(1000 * (cd));
+
     await program.methods.unstake(salt, unstakeTwo).accounts({
       userDepositTokenAccount: userTwoUnstaked,
       userStakingTokenAccount: userTwoStaked,
@@ -251,6 +260,15 @@ describe("stake", () => {
     }).signers([userTwo]).rpc().catch(e => console.error(e));
 
     // Unstake remainder as user two (should fail due to cooldown)
+    await program.methods.startUnstake(salt, unstakeTwo).accounts({
+      userDepositTokenAccount: userTwoUnstaked,
+      userStakingTokenAccount: userTwoStaked,
+      user: userTwo.publicKey
+    }).signers([userTwo]).rpc().catch(e => console.error(e));
+
+    // Should fail when commented out or removed
+    await sleep(1000 * (cd));
+
     await program.methods.unstake(salt, unstakeTwo).accounts({
       userDepositTokenAccount: userTwoUnstaked,
       userStakingTokenAccount: userTwoStaked,
