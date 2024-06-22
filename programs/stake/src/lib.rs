@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::token::{self, Transfer};
 mod context;
 use context::*;
 
@@ -28,10 +28,6 @@ pub struct VaultState {
     pub last_distribution_time: u32,
     pub total_assets: u64,
     pub vesting_period: u32,
-
-    /// See [`https://blog.openzeppelin.com/a-novel-defense-against-erc4626-inflation-attacks`]
-    pub offset: u8,
-
     pub rewarders: Vec<Pubkey>,
     pub blacklist: Vec<Pubkey>,
 }
@@ -45,16 +41,11 @@ pub mod stake {
         ctx: Context<InitializeVaultState>,
         admin: Pubkey,
         _salt: [u8; 8],
-        offset: u8,
         cooldown: u32,
     ) -> Result<()> {
-        // todo
-        require!(offset < 9, StakeError::BadOffset);
-
         ctx.accounts.vault_state.bump = ctx.bumps.vault_state;
         ctx.accounts.vault_state.deposit_token = ctx.accounts.deposit_token.key();
         ctx.accounts.vault_state.admin = admin;
-        ctx.accounts.vault_state.offset = offset;
         ctx.accounts.vault_state.cooldown = cooldown;
         ctx.accounts.vault_state.vesting_amount = 0;
         ctx.accounts.vault_state.last_distribution_time = 0;
@@ -67,13 +58,6 @@ pub mod stake {
 
     pub fn initialize_program_accounts(
         _ctx: Context<InitializeProgramAccounts>,
-        _salt: [u8; 8],
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn initialize_user_account(
-        _ctx: Context<InitializeUserAccount>,
         _salt: [u8; 8],
     ) -> Result<()> {
         Ok(())
@@ -331,19 +315,16 @@ impl UserPDA {
 
     pub fn get_available_assets(&mut self) -> Result<u64> {
         let time = Clock::get()?.unix_timestamp as u32;
-        
-        let mut uncooled = VecDeque::with_capacity(10);
 
-        // Iterate over unstake_queue and assets
-        while let Some((cd, assets)) = self.unstake_queue.pop_front() {
-            if time >= cd {
+        // Iterate over unstake_queue and add cooled-down assets to user data
+        while let Some((cd, assets)) = self.unstake_queue.get(0) {
+            if time >= *cd {
                 self.assets_available += assets;
+                self.unstake_queue.pop_front();
             } else {
-                uncooled.push_back((cd, assets));
+                break;
             }
         }
-
-        self.unstake_queue = uncooled;
 
         Ok(self.assets_available)
     }
@@ -417,6 +398,4 @@ pub enum StakeError {
     AssetsUnavailable,
     #[msg("Bad Staking Token Decimals, they must be gte than the deposit token")]
     BadStakingTokenDecimals,
-    #[msg("Offset too high")]
-    BadOffset
 }

@@ -38,7 +38,6 @@ describe("stake", () => {
   );
   const cd = 1;
   const vestingPeriod = 10;
-  const offset = 8;
 
   before(async () => {
     user = anchor.web3.Keypair.generate();
@@ -86,7 +85,7 @@ describe("stake", () => {
     await anchor.AnchorProvider.env().sendAndConfirm(collatMintTx, []);
 
     // Initialize staking vault and token accounts
-    await program.methods.initializeVaultState(adminKey, salt, offset, 0).accounts({
+    await program.methods.initializeVaultState(adminKey, salt, 0).accounts({
       depositToken: unstakedMint.publicKey,
       caller: adminKey,
     }).rpc().catch(e => console.error(e));

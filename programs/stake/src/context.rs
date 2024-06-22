@@ -3,7 +3,7 @@ use anchor_spl::token::{Mint, Token, TokenAccount, Transfer, MintTo, Burn};
 use super::*;
 
 #[derive(Accounts)]
-#[instruction(admin: Pubkey, salt: [u8; 8], offset: u8, cooldown: u32)]
+#[instruction(admin: Pubkey, salt: [u8; 8], cooldown: u32)]
 pub struct InitializeVaultState<'info> {
     /// The vault state for this deposit token and admin
     #[account(
@@ -37,7 +37,7 @@ pub struct InitializeProgramAccounts<'info> {
         init,
         payer = caller,
         seeds = [STAKING_TOKEN_SEED, vault_state.key().as_ref()],
-        mint::decimals = deposit_token.decimals + vault_state.offset,
+        mint::decimals = deposit_token.decimals,
         mint::authority = vault_state,
         bump
     )]
@@ -58,29 +58,6 @@ pub struct InitializeProgramAccounts<'info> {
     #[account(mut)]
     pub caller: Signer<'info>,
     pub token_program: Program<'info, Token>,
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-#[instruction(salt: [u8; 8])]
-pub struct InitializeUserAccount<'info> {
-    #[account(
-        seeds = [VAULT_STATE_SEED, salt.as_ref()], 
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-
-    #[account(
-        init_if_needed, 
-        payer = user, 
-        space = 32 + 8, 
-        seeds = [USER_DATA_SEED, user.key().as_ref(), vault_state.key().as_ref()], 
-        bump
-    )]
-    pub user_data: Account<'info, UserPDA>,
-
-    #[account(mut)]
-    pub user: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
@@ -210,7 +187,7 @@ pub struct Unstake<'info> {
     #[account(
         init_if_needed, 
         payer = user, 
-        space = 8 + 8 + 10 * 96, 
+        space = 8 + 8 + 10 * 12, 
         seeds = [USER_DATA_SEED, user.key().as_ref(), vault_state.key().as_ref()], 
         bump
     )]
