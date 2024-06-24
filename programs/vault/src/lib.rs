@@ -15,6 +15,7 @@ pub struct VaultState {
     pub approved_minters: Vec<Pubkey>,
     pub approved_redeemers: Vec<Pubkey>,
     pub managers: Vec<Pubkey>,
+    pub withdraw_addresses: Vec<Pubkey>,
     pub admin: Pubkey,
     pub bump: u8,
 }
@@ -49,8 +50,8 @@ pub mod vault {
 
     // The deposit rate is (stable units / asset units) [how many stable coins a depositer will get per asset coin]
     // The redeem rate is (asset units / stable units) [how many asset coins a depositer will get per stable coin]
-    pub fn add_asset(
-        ctx: Context<AddAsset>,
+    pub fn update_asset(
+        ctx: Context<UpdateAsset>,
         asset: Pubkey,
         deposit_rate: u64,
         redeem_rate: u64,
@@ -62,7 +63,28 @@ pub mod vault {
         ctx.accounts.exchange_rate.deposit_rate = deposit_rate;
         ctx.accounts.exchange_rate.redeem_rate = redeem_rate;
 
-        emit!(AssetAddedEvent{
+        emit!(AssetModifiedEvent{
+            who: ctx.accounts.authority.key(),
+            asset: asset,
+        });
+
+        Ok(())
+    }
+
+    pub fn set_exchange_rate(
+        ctx: Context<SetRate>,
+        asset: Pubkey,
+        deposit_rate: u64,
+        redeem_rate: u64,
+    ) -> Result<()> {
+        if ctx.accounts.authority.key() != ctx.accounts.vault_state.admin {
+            return Err(MintError::NotAdmin.into());
+        }
+
+        ctx.accounts.exchange_rate.deposit_rate = deposit_rate;
+        ctx.accounts.exchange_rate.redeem_rate = redeem_rate;
+
+        emit!(RateChangedEvent{
             who: ctx.accounts.authority.key(),
             asset: asset,
         });
@@ -74,6 +96,10 @@ pub mod vault {
         let state = &ctx.accounts.vault_state;
         let rate = ctx.accounts.exchange_rate.deposit_rate;
         let amt = collat * rate / DECIMALS_SCALAR; 
+
+        if rate == 0 {
+            return Err(MintError::AssetNotSupported.into());
+        }
 
         let approved_minters = &state.approved_minters;
         if !approved_minters.contains(&ctx.accounts.minter.key()) {
@@ -123,6 +149,10 @@ pub mod vault {
         let decimals = ctx.accounts.collateral_token_mint.decimals;
         let collat = amt * rate / 10_u64.pow(decimals as u32);
 
+        if rate == 0 {
+            return Err(MintError::AssetNotSupported.into());
+        }
+
         let approved_minters = &state.approved_minters;
         if !approved_minters.contains(&ctx.accounts.redeemer.key()) {
             return Err(MintError::NotAnApprovedRedeemer.into());
@@ -166,15 +196,15 @@ pub mod vault {
     }
 
     pub fn withdraw(ctx: Context<Withdraw>, amt: u64) -> Result<()> {
-        let caller = &ctx.accounts.caller.key();
-        if !ctx.accounts.vault_state.managers.contains(caller) {
+        let destination = &ctx.accounts.destination.key();
+        if !ctx.accounts.vault_state.withdraw_addresses.contains(destination) {
             return Err(MintError::NotManager.into());
         }
 
         // Transfer collateral
         let transfer_instruction = Transfer {
             from: ctx.accounts.program_collat.to_account_info(),
-            to: ctx.accounts.caller.to_account_info(),
+            to: ctx.accounts.destination.to_account_info(),
             authority: ctx.accounts.vault_state.to_account_info(),
         };
 
@@ -189,7 +219,7 @@ pub mod vault {
         token::transfer(cpi_ctx, amt)?;
 
         emit!(WithdrawEvent {
-            who: *caller,
+            who: *destination,
             amt: amt,
         });
 
@@ -324,6 +354,51 @@ pub mod vault {
         Ok(())
     }
 
+    pub fn add_withdraw_address(ctx: Context<WithdrawAddresses>, address: Pubkey) -> Result<()> {
+        let caller = ctx.accounts.caller.key();
+
+        if caller != ctx.accounts.vault_state.admin {
+            return Err(MintError::NotAdmin.into());
+        }
+
+        let withdraw_addresses = &mut ctx.accounts.vault_state.withdraw_addresses;
+
+        if !withdraw_addresses.contains(&address) {
+            withdraw_addresses.push(address);
+        } else {
+            return Err(MintError::AlreadyWithdrawer.into());
+        }
+
+        emit!(WithdrawAddressAdded {
+            address: address,
+            added_by: caller,
+        });
+
+        Ok(())
+    }
+
+    pub fn remove_withdraw_address(ctx: Context<WithdrawAddresses>, address: Pubkey) -> Result<()> {
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
+            return Err(MintError::NotAdmin.into());
+        }
+
+        let withdraw_addresses = &mut ctx.accounts.vault_state.withdraw_addresses;
+
+        if let Some(i) = withdraw_addresses.iter().position(|&x| x == address) {
+            withdraw_addresses.swap_remove(i);
+        } else {
+            return Err(MintError::NotWithdrawerYet.into());
+        }
+
+        emit!(WithdrawAddressRemoved{
+            address: address,
+            removed_by: ctx.accounts.caller.key(),
+        });
+
+        Ok(())
+    }
+
+
     pub fn transfer_admin(ctx: Context<TransferAdmin>, new_admin: Pubkey) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
@@ -373,7 +448,7 @@ pub struct InitializeVaultState<'info> {
 
 #[derive(Accounts)]
 #[instruction(asset: Pubkey)]
-pub struct AddAsset<'info> {
+pub struct UpdateAsset<'info> {
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
 
@@ -406,6 +481,27 @@ pub struct AddAsset<'info> {
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(asset: Pubkey)]
+pub struct SetRate<'info> {
+    #[account(
+        mut,
+        seeds = [EXCHANGE_RATE_SEED, asset.as_ref()],
+        bump
+    )]
+    pub exchange_rate: Account<'info, ExchangeRate>,
+
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+
     #[account(mut)]
     pub authority: Signer<'info>,
 }
@@ -531,7 +627,7 @@ pub struct Withdraw<'info> {
     pub program_collat: Account<'info, TokenAccount>,
 
     #[account(mut)]
-    pub caller: Account<'info, TokenAccount>,
+    pub destination: Account<'info, TokenAccount>,
     #[account(mut)]
     pub collat_mint: Account<'info, Mint>,
     #[account(
@@ -544,6 +640,18 @@ pub struct Withdraw<'info> {
 
 #[derive(Accounts)]
 pub struct Minters<'info> {
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED],
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub caller: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct WithdrawAddresses<'info> {
     #[account(
         mut,
         seeds = [VAULT_STATE_SEED],
@@ -591,7 +699,13 @@ pub struct TransferAdmin<'info> {
 }
 
 #[event]
-pub struct AssetAddedEvent {
+pub struct AssetModifiedEvent {
+    who: Pubkey,
+    asset: Pubkey,
+}
+
+#[event]
+pub struct RateChangedEvent {
     who: Pubkey,
     asset: Pubkey,
 }
@@ -618,6 +732,18 @@ pub struct RedeemEvent {
 pub struct NewMinterEvent {
     new_minter: Pubkey,
     added_by: Pubkey,
+}
+
+#[event]
+pub struct WithdrawAddressAdded {
+    address: Pubkey,
+    added_by: Pubkey,
+}
+
+#[event]
+pub struct WithdrawAddressRemoved {
+    address: Pubkey,
+    removed_by: Pubkey,
 }
 
 #[event]
@@ -670,14 +796,20 @@ pub enum MintError {
     AlreadyMinter,
     #[msg("The redeemer is already whitelisted")]
     AlreadyRedeemer,
+    #[msg("The withdraw address is already whitelisted")]
+    AlreadyWithdrawer,
     #[msg("The provided key is already a manager")]
     AlreadyManager,
     #[msg("The minter is not whitelisted")]
     MinterNotWhitelisted,
+    #[msg("The withdraw address is not whitelisted")]
+    AddressNotWhitelisted,
     #[msg("The redeemer is not whitelisted")]
     RedeemerNotWhitelisted,
     #[msg("The provided key is not yet a manager")]
     NotManagerYet,
+    #[msg("The provided key is not yet a whitelisted withdraw address")]
+    NotWithdrawerYet,
     #[msg("Max mint for this block has been exceeded")]
     MaxMintExceeded,
     #[msg("Max redeem for this block has been exceeded")]

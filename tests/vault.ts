@@ -89,10 +89,6 @@ describe("vault", () => {
 
     await anchor.AnchorProvider.env().sendAndConfirm(ataTx, []);
 
-    console.log(
-      await program.provider.connection.getParsedAccountInfo(vaultMint)
-    );
-
     const mintAmount = 10000000000;
 
     vaultCollat = await getAssociatedTokenAddress(userTokenMintKey.publicKey, vaultAuthority.publicKey);
@@ -148,12 +144,11 @@ describe("vault", () => {
     const redeemRate = new anchor.BN(1000000000);
 
     // Add asset
-    const addAssetTx = await program.methods.addAsset(userTokenMintKey.publicKey, depositRate, redeemRate).accounts({
+    const addAssetTx = await program.methods.updateAsset(userTokenMintKey.publicKey, depositRate, redeemRate).accounts({
       authority: adminKey,
       collateralTokenMint: userTokenMintKey.publicKey,
     }).rpc();
 
-    console.log("Add asset signature: ", addAssetTx);
     console.log("Asset added: ", assetKey.toString());
 
     // Whitelist depositer as minter and redeemer
@@ -210,11 +205,12 @@ describe("vault", () => {
     console.log("User collat tokens after redemption: ", collatTokensAfterRedemption);
   });
   
-  it("Add manager and withdraw deposited collateral", async () => {
+  it("Add withdrawer and withdraw deposited collateral", async () => {
     const withdrawer = anchor.web3.Keypair.generate();
 
     const withdrawerCollat = await getAssociatedTokenAddress(userTokenMintKey.publicKey, withdrawer.publicKey);
 
+    // Create withdrawer's ATA
     const ataTx = new anchor.web3.Transaction().add(
       createAssociatedTokenAccountInstruction(adminKey, withdrawerCollat, withdrawer.publicKey, userTokenMintKey.publicKey),
     );
@@ -223,17 +219,17 @@ describe("vault", () => {
 
     const amt = new anchor.BN(40000);
     
-    // Add manager
-    await program.methods.addManager(withdrawerCollat).rpc();
+    // Add withdraw address
+    await program.methods.addWithdrawAddress(withdrawerCollat).rpc();
 
-    console.log("Added manager: ", withdrawerCollat.toString());
+    console.log("Added withdraw address: ", withdrawerCollat.toString());
 
     let callerInfo = await program.provider.connection.getParsedAccountInfo(withdrawerCollat);
     const withdrawerBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
     
     // Withdraw
     const withdrawTx = await program.methods.withdraw(amt).accounts({
-      caller: withdrawerCollat,
+      destination: withdrawerCollat,
       collatMint: userTokenMintKey.publicKey,
     }).signers([]).rpc();
     
@@ -243,10 +239,10 @@ describe("vault", () => {
     console.log("Withdrawer collat tokens before withdraw: ", withdrawerBefore);
     console.log("Withdrawer collat tokens after withdraw: ", withdrawerAfter);
 
-    // Add manager
-    await program.methods.removeManager(withdrawerCollat).rpc();
+    // Remove withdraw address
+    await program.methods.removeWithdrawAddress(withdrawerCollat).rpc();
 
-    console.log("Removed manager: ", withdrawerCollat.toString());
+    console.log("Removed withdraw address: ", withdrawerCollat.toString());
   });
 
   it("Transfer admin back and forth", async () => {

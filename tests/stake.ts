@@ -289,18 +289,6 @@ describe("stake", () => {
     console.log("User two unstaked tokens after unstaking: ", unstakedTwoAfter);
     console.log("User two staked tokens after unstaking: ", stakedTwoAfter);
   });
-  
-  /*
-  it("Transfer admin back and forth", async () => {
-    await program.methods.transferAdmin(user.publicKey, salt).rpc()
-    console.log("Transfered admin to: ", user.publicKey.toString());
-
-    await program.methods.transferAdmin(adminKey, salt).accounts({
-      caller: user.publicKey,
-    }).signers([user]).rpc();
-    console.log("Transfered admin back to: ", adminKey.toString());
-  });
-  */
 });
 
 function sleep(ms: number) {
