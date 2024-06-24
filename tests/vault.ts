@@ -58,6 +58,10 @@ describe("vault", () => {
     }).rpc();
     console.log("Admin: ", adminKey.toString());
 
+    // Add admin as manager
+    await program.methods.addManager(adminKey).rpc();
+    console.log("Added manager: ", adminKey.toString());
+
     // Remove admin from whitelisted minters / redeemers (added by default)
     await program.methods.removeMinter(adminKey).rpc();
     console.log("Removed minter: ", adminKey.toString());
@@ -112,7 +116,6 @@ describe("vault", () => {
     );
 
     await anchor.AnchorProvider.env().sendAndConfirm(userTokenMintTx, [userTokenMintKey]);
-
     console.log("Collat Mint key: ", userTokenMintKey.publicKey.toString());
     
     const createVaultsTx = new anchor.web3.Transaction().add(
@@ -148,7 +151,6 @@ describe("vault", () => {
       authority: adminKey,
       collateralTokenMint: userTokenMintKey.publicKey,
     }).rpc();
-
     console.log("Asset added: ", assetKey.toString());
 
     // Whitelist depositer as minter and redeemer

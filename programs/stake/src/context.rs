@@ -140,6 +140,15 @@ impl<'info> Stake<'info> {
 
         token::mint_to(cpi_ctx, amount)
     }
+
+    pub fn check_min_shares(&self) -> Result<()> {
+        let shares = self.staking_token.supply;
+        if self.user.key() != self.vault_state.admin && shares > 0 && shares < self.vault_state.min_shares {
+            return Err(StakeError::MinSharesViolation.into())
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -237,6 +246,15 @@ impl<'info> Unstake<'info> {
         );
 
         token::burn(cpi_ctx, amount)
+    }
+
+    pub fn check_min_shares(&self) -> Result<()> {
+        let shares = self.staking_token.supply;
+        if self.user.key() != self.vault_state.admin && shares > 0 && shares < self.vault_state.min_shares {
+            return Err(StakeError::MinSharesViolation.into())
+        }
+
+        Ok(())
     }
 }
 

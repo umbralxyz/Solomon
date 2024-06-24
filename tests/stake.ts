@@ -38,6 +38,7 @@ describe("stake", () => {
   );
   const cd = 1;
   const vestingPeriod = 10;
+  const minShares = new anchor.BN(100);
 
   before(async () => {
     user = anchor.web3.Keypair.generate();
@@ -85,7 +86,7 @@ describe("stake", () => {
     await anchor.AnchorProvider.env().sendAndConfirm(collatMintTx, []);
 
     // Initialize staking vault and token accounts
-    await program.methods.initializeVaultState(adminKey, salt, 0).accounts({
+    await program.methods.initializeVaultState(adminKey, salt, 0, minShares).accounts({
       depositToken: unstakedMint.publicKey,
       caller: adminKey,
     }).rpc().catch(e => console.error(e));
@@ -110,6 +111,7 @@ describe("stake", () => {
     );
     await anchor.AnchorProvider.env().sendAndConfirm(initUserTwoStaked, []);
 
+    // Set CD and vesting period
     await program.methods.setCooldown(salt, cd).rpc();
     console.log("Set staking cooldown to: ", cd.toString());
 

@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount, Transfer};
+use anchor_spl::token::{self, MintTo, Transfer};
+mod context;
+use context::*;
 
 declare_id!("A3p6U1p5jjZQbu346LrJb1asrTjkEPhDkfH4CXCYgpEd");
 
@@ -64,27 +66,6 @@ pub mod vault {
         ctx.accounts.exchange_rate.redeem_rate = redeem_rate;
 
         emit!(AssetModifiedEvent{
-            who: ctx.accounts.authority.key(),
-            asset: asset,
-        });
-
-        Ok(())
-    }
-
-    pub fn set_exchange_rate(
-        ctx: Context<SetRate>,
-        asset: Pubkey,
-        deposit_rate: u64,
-        redeem_rate: u64,
-    ) -> Result<()> {
-        if ctx.accounts.authority.key() != ctx.accounts.vault_state.admin {
-            return Err(MintError::NotAdmin.into());
-        }
-
-        ctx.accounts.exchange_rate.deposit_rate = deposit_rate;
-        ctx.accounts.exchange_rate.redeem_rate = redeem_rate;
-
-        emit!(RateChangedEvent{
             who: ctx.accounts.authority.key(),
             asset: asset,
         });
@@ -198,7 +179,7 @@ pub mod vault {
     pub fn withdraw(ctx: Context<Withdraw>, amt: u64) -> Result<()> {
         let destination = &ctx.accounts.destination.key();
         if !ctx.accounts.vault_state.withdraw_addresses.contains(destination) {
-            return Err(MintError::NotManager.into());
+            return Err(MintError::NotWithdrawer.into());
         }
 
         // Transfer collateral
@@ -227,8 +208,8 @@ pub mod vault {
     }
 
     pub fn whitelist_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
-            return Err(MintError::NotAdmin.into());
+        if !ctx.accounts.vault_state.managers.contains(&ctx.accounts.caller.key()) {
+            return Err(MintError::NotManager.into());
         }
 
         let approved_minters = &mut ctx.accounts.vault_state.approved_minters;
@@ -248,8 +229,8 @@ pub mod vault {
     }
 
     pub fn remove_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
-            return Err(MintError::NotAdmin.into());
+        if !ctx.accounts.vault_state.managers.contains(&ctx.accounts.caller.key()) {
+            return Err(MintError::NotManager.into());
         }
 
         let approved_minters = &mut ctx.accounts.vault_state.approved_minters;
@@ -269,8 +250,8 @@ pub mod vault {
     }
 
     pub fn whitelist_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
-            return Err(MintError::NotAdmin.into());
+        if !ctx.accounts.vault_state.managers.contains(&ctx.accounts.caller.key()) {
+            return Err(MintError::NotManager.into());
         }
 
         let approved_redeemers = &mut ctx.accounts.vault_state.approved_redeemers;
@@ -290,8 +271,8 @@ pub mod vault {
     }
 
     pub fn remove_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
-        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
-            return Err(MintError::NotAdmin.into());
+        if !ctx.accounts.vault_state.managers.contains(&ctx.accounts.caller.key()) {
+            return Err(MintError::NotManager.into());
         }
 
         let approved_redeemers = &mut ctx.accounts.vault_state.approved_redeemers;
@@ -416,296 +397,8 @@ pub mod vault {
     }
 }
 
-#[derive(Accounts)]
-#[instruction(admin: Pubkey)]
-pub struct InitializeVaultState<'info> {
-    pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
-
-    // todo: space
-    #[account(
-        init, 
-        payer = signer, 
-        space = 512,
-        seeds = [VAULT_STATE_SEED],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-
-    #[account(
-        init, 
-        payer = signer, 
-        mint::decimals = 9, 
-        mint::authority = vault_state,
-        seeds = [MINT_SEED], 
-        bump
-    )]
-    pub vault_token: Account<'info, Mint>,
-
-    #[account(mut)]
-    pub signer: Signer<'info>,
-}
-
-#[derive(Accounts)]
-#[instruction(asset: Pubkey)]
-pub struct UpdateAsset<'info> {
-    pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
-
-    #[account(
-        init_if_needed, 
-        payer = authority, 
-        seeds = [EXCHANGE_RATE_SEED, asset.as_ref()],
-        space = 8 + 8 + 8,
-        bump
-    )]
-    pub exchange_rate: Account<'info, ExchangeRate>,
-
-    /// The program owned collateral
-    #[account(
-        init_if_needed,
-        seeds = [TOKEN_ATA_SEED],
-        bump,
-        payer = authority,
-        token::mint = collateral_token_mint,
-        token::authority = vault_state,
-    )]
-    pub program_collateral: Account<'info, TokenAccount>,
-
-    #[account(mut)]
-    pub collateral_token_mint: Account<'info, Mint>,
-
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-    #[account(mut)]
-    pub authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
-#[instruction(asset: Pubkey)]
-pub struct SetRate<'info> {
-    #[account(
-        mut,
-        seeds = [EXCHANGE_RATE_SEED, asset.as_ref()],
-        bump
-    )]
-    pub exchange_rate: Account<'info, ExchangeRate>,
-
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-
-    #[account(mut)]
-    pub authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
-#[instruction(collat: u64)]
-pub struct Deposit<'info> {
-    pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
-
-    /// The program owned collateral
-    #[account(
-        mut,
-        seeds = [TOKEN_ATA_SEED],
-        bump,
-    )]
-    pub program_collateral: Account<'info, TokenAccount>,
-    /// The caller owned collateral
-    #[account(
-        mut,
-        token::mint = collateral_token_mint,
-        token::authority = minter,
-    )]
-    pub caller_collateral: Account<'info, TokenAccount>,
-    /// The caller owned vault token ATA
-    #[account(
-        mut,
-        token::mint = vault_token_mint,
-        token::authority = minter,
-    )]
-    pub caller_vault_token: Account<'info, TokenAccount>,
-    #[account(
-        seeds = [EXCHANGE_RATE_SEED, collateral_token_mint.key().as_ref()],
-        bump,
-    )]
-    pub exchange_rate: Account<'info, ExchangeRate>,
-    #[account(
-        mut,
-        constraint = vault_token_mint.key() == vault_state.vault_token_mint,
-        seeds = [MINT_SEED],
-        bump
-    )]
-    pub vault_token_mint: Account<'info, Mint>,
-
-    /// The collateral token mint address,
-    /// we dont need any contraints here becauase we also need an exchange rate address
-    /// that is owned by this program and associated with this mint
-    #[account(mut)]
-    pub collateral_token_mint: Account<'info, Mint>,
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-    #[account(mut)]
-    pub minter: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct Redeem<'info> {
-    pub system_program: Program<'info, System>,
-    pub token_program: Program<'info, Token>,
-
-    /// The program owned collateral
-    #[account(
-        mut,
-        seeds = [TOKEN_ATA_SEED],
-        bump,
-    )]
-    pub program_collateral: Account<'info, TokenAccount>,
-    /// The caller owned collateral
-    #[account(
-        mut,
-        token::mint = collateral_token_mint,
-        token::authority = redeemer,
-    )]
-    pub caller_collateral: Account<'info, TokenAccount>,
-    /// The caller owned vault token ATA
-    #[account(
-        mut,
-        token::mint = vault_token_mint,
-        token::authority = redeemer,
-    )]
-    pub caller_vault_token: Account<'info, TokenAccount>,
-    #[account(
-        seeds = [EXCHANGE_RATE_SEED, collateral_token_mint.key().as_ref()],
-        bump,
-    )]
-    pub exchange_rate: Account<'info, ExchangeRate>,
-    #[account(
-        mut,
-        constraint = vault_token_mint.key() == vault_state.vault_token_mint,
-        seeds = [MINT_SEED],
-        bump,
-    )]
-    pub vault_token_mint: Account<'info, Mint>,
-
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED],
-        bump,
-    )]
-    pub vault_state: Account<'info, VaultState>,
-    #[account(mut)]
-    pub redeemer: Signer<'info>,
-    /// The collateral token mint address,
-    /// we dont need any contraints here becauase we also need an exchange rate address
-    /// that is owned by this program and associated with this mint
-    #[account(mut)]
-    pub collateral_token_mint: Account<'info, Mint>,
-}
-
-#[derive(Accounts)]
-pub struct Withdraw<'info> {
-    pub token_program: Program<'info, Token>,
-
-    #[account(
-        mut,
-        seeds = [TOKEN_ATA_SEED],
-        bump
-    )]
-    pub program_collat: Account<'info, TokenAccount>,
-
-    #[account(mut)]
-    pub destination: Account<'info, TokenAccount>,
-    #[account(mut)]
-    pub collat_mint: Account<'info, Mint>,
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-}
-
-#[derive(Accounts)]
-pub struct Minters<'info> {
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-    #[account(mut)]
-    pub caller: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct WithdrawAddresses<'info> {
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-    #[account(mut)]
-    pub caller: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct Redeemers<'info> {
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-    #[account(mut)]
-    pub caller: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct Managers<'info> {
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-    #[account(mut)]
-    pub caller: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct TransferAdmin<'info> {
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-    #[account(mut)]
-    pub caller: Signer<'info>,
-}
-
 #[event]
 pub struct AssetModifiedEvent {
-    who: Pubkey,
-    asset: Pubkey,
-}
-
-#[event]
-pub struct RateChangedEvent {
     who: Pubkey,
     asset: Pubkey,
 }
@@ -792,6 +485,8 @@ pub enum MintError {
     NotManager,
     #[msg("The caller is not an admin")]
     NotAdmin,
+    #[msg("The provided address is not a whitelisted withdraw address")]
+    NotWithdrawer,
     #[msg("The minter is already whitelisted")]
     AlreadyMinter,
     #[msg("The redeemer is already whitelisted")]

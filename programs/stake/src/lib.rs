@@ -27,6 +27,7 @@ pub struct VaultState {
     pub vesting_amount: u64,
     pub last_distribution_time: u32,
     pub total_assets: u64,
+    pub min_shares: u64,
     pub vesting_period: u32,
     pub rewarders: Vec<Pubkey>,
     pub blacklist: Vec<Pubkey>,
@@ -42,6 +43,7 @@ pub mod stake {
         admin: Pubkey,
         _salt: [u8; 8],
         cooldown: u32,
+        min_shares: u64,
     ) -> Result<()> {
         ctx.accounts.vault_state.bump = ctx.bumps.vault_state;
         ctx.accounts.vault_state.deposit_token = ctx.accounts.deposit_token.key();
@@ -50,6 +52,7 @@ pub mod stake {
         ctx.accounts.vault_state.vesting_amount = 0;
         ctx.accounts.vault_state.last_distribution_time = 0;
         ctx.accounts.vault_state.total_assets = 0;
+        ctx.accounts.vault_state.min_shares = min_shares;
         ctx.accounts.vault_state.vesting_period = 8 * 3600;
         ctx.accounts.vault_state.blacklist = vec![];
 
@@ -70,6 +73,11 @@ pub mod stake {
 
         ctx.accounts.vault_state.cooldown = duration;
 
+        emit!(SetCooldownEvent{
+            who: ctx.accounts.caller.key(),
+            duration: duration,
+        });
+
         Ok(())
     }
 
@@ -79,6 +87,11 @@ pub mod stake {
         }
 
         ctx.accounts.vault_state.vesting_period = duration;
+
+        emit!(SetVestingPeriodEvent{
+            who: ctx.accounts.caller.key(),
+            duration: duration,
+        });
 
         Ok(())
     }
@@ -98,6 +111,11 @@ pub mod stake {
         }
 
         ctx.accounts.vault_state.blacklist.push(user);
+
+        emit!(AddToBlacklistEvent {
+            who: user,
+            added_by: ctx.accounts.caller.key(),
+        });
 
         Ok(())
     }
@@ -153,7 +171,7 @@ pub mod stake {
         {
             return Err(StakeError::Blacklisted.into());
         }
-
+        
         let shares = ctx.accounts.vault_state.convert_to_shares(
             amt,
             ctx.accounts.staking_token.supply,
@@ -161,6 +179,8 @@ pub mod stake {
         ctx.accounts.transfer_from_user_to_vault(amt)?;
         ctx.accounts.mint_tokens_to_user(&salt, shares)?;
         ctx.accounts.vault_state.total_assets += amt;
+
+        ctx.accounts.check_min_shares()?;
 
         emit!(StakeEvent {
             who: ctx.accounts.user.key(),
@@ -181,10 +201,10 @@ pub mod stake {
             return Err(StakeError::Blacklisted.into());
         }
 
+        ctx.accounts.check_min_shares()?;
+
         let cd = ctx.accounts.vault_state.cooldown;
-
         let time = Clock::get()?.unix_timestamp as u32;
-
         let cd_end = time + cd;
 
         let assets = ctx.accounts.vault_state.convert_to_assets(
@@ -195,6 +215,8 @@ pub mod stake {
         ctx.accounts.burn_tokens_from_user(shares)?;
         ctx.accounts.vault_state.total_assets -= assets;
         ctx.accounts.user_data.unstake_queue.push_back((cd_end, assets));
+
+        ctx.accounts.check_min_shares()?;
 
         emit!(StartUnstakeEvent {
             who: ctx.accounts.user.key(),
@@ -331,6 +353,18 @@ impl UserPDA {
 }
 
 #[event]
+pub struct SetVestingPeriodEvent {
+    who: Pubkey,
+    duration: u32,
+}
+
+#[event]
+pub struct SetCooldownEvent {
+    who: Pubkey,
+    duration: u32,
+}
+
+#[event]
 pub struct StakeEvent {
     who: Pubkey,
     assets: u64,
@@ -369,6 +403,12 @@ pub struct RemoveRewarderEvent {
 }
 
 #[event]
+pub struct AddToBlacklistEvent {
+    who: Pubkey,
+    added_by: Pubkey,
+}
+
+#[event]
 pub struct AdminTransferEvent {
     old_admin: Pubkey,
     new_admin: Pubkey,
@@ -398,4 +438,6 @@ pub enum StakeError {
     AssetsUnavailable,
     #[msg("Bad Staking Token Decimals, they must be gte than the deposit token")]
     BadStakingTokenDecimals,
+    #[msg("Total shares are below minimum for staking or unstaking")]
+    MinSharesViolation,
 }
