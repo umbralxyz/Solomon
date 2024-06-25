@@ -59,8 +59,11 @@ describe("vault", () => {
     console.log("Admin: ", adminKey.toString());
 
     // Add admin as manager
-    await program.methods.addManager(adminKey).rpc();
-    console.log("Added manager: ", adminKey.toString());
+    await program.methods.addRoleManager(adminKey).rpc();
+    console.log("Added role manager: ", adminKey.toString());
+
+    await program.methods.addAssetManager(adminKey).rpc();
+    console.log("Added asset manager: ", adminKey.toString());
 
     // Remove admin from whitelisted minters / redeemers (added by default)
     await program.methods.removeMinter(adminKey).rpc();
@@ -243,8 +246,14 @@ describe("vault", () => {
 
     // Remove withdraw address
     await program.methods.removeWithdrawAddress(withdrawerCollat).rpc();
-
     console.log("Removed withdraw address: ", withdrawerCollat.toString());
+
+    // Remove admin from managers
+    await program.methods.removeRoleManager(adminKey).rpc();
+    console.log("Removed role manager: ", adminKey.toString());
+
+    await program.methods.removeAssetManager(adminKey).rpc();
+    console.log("Removed asset manager: ", adminKey.toString());
   });
 
   it("Transfer admin back and forth", async () => {

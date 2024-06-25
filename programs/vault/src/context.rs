@@ -222,6 +222,8 @@ pub struct Withdraw<'info> {
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
+    #[account(mut)]
+    pub caller: Signer<'info>,
 }
 
 #[derive(Accounts)]

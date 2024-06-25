@@ -16,7 +16,8 @@ pub struct VaultState {
     pub vault_token_mint: Pubkey,
     pub approved_minters: Vec<Pubkey>,
     pub approved_redeemers: Vec<Pubkey>,
-    pub managers: Vec<Pubkey>,
+    pub asset_managers: Vec<Pubkey>,
+    pub role_managers: Vec<Pubkey>,
     pub withdraw_addresses: Vec<Pubkey>,
     pub admin: Pubkey,
     pub bump: u8,
@@ -134,8 +135,8 @@ pub mod vault {
             return Err(MintError::AssetNotSupported.into());
         }
 
-        let approved_minters = &state.approved_minters;
-        if !approved_minters.contains(&ctx.accounts.redeemer.key()) {
+        let approved_redeemers = &state.approved_redeemers;
+        if !approved_redeemers.contains(&ctx.accounts.redeemer.key()) {
             return Err(MintError::NotAnApprovedRedeemer.into());
         }
 
@@ -177,6 +178,10 @@ pub mod vault {
     }
 
     pub fn withdraw(ctx: Context<Withdraw>, amt: u64) -> Result<()> {
+        if !ctx.accounts.vault_state.asset_managers.contains(&ctx.accounts.caller.key()) {
+            return Err(MintError::NotManager.into());
+        }
+
         let destination = &ctx.accounts.destination.key();
         if !ctx.accounts.vault_state.withdraw_addresses.contains(destination) {
             return Err(MintError::NotWithdrawer.into());
@@ -208,7 +213,7 @@ pub mod vault {
     }
 
     pub fn whitelist_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
-        if !ctx.accounts.vault_state.managers.contains(&ctx.accounts.caller.key()) {
+        if !ctx.accounts.vault_state.role_managers.contains(&ctx.accounts.caller.key()) {
             return Err(MintError::NotManager.into());
         }
 
@@ -229,7 +234,7 @@ pub mod vault {
     }
 
     pub fn remove_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
-        if !ctx.accounts.vault_state.managers.contains(&ctx.accounts.caller.key()) {
+        if !ctx.accounts.vault_state.role_managers.contains(&ctx.accounts.caller.key()) {
             return Err(MintError::NotManager.into());
         }
 
@@ -250,7 +255,7 @@ pub mod vault {
     }
 
     pub fn whitelist_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
-        if !ctx.accounts.vault_state.managers.contains(&ctx.accounts.caller.key()) {
+        if !ctx.accounts.vault_state.role_managers.contains(&ctx.accounts.caller.key()) {
             return Err(MintError::NotManager.into());
         }
 
@@ -271,7 +276,7 @@ pub mod vault {
     }
 
     pub fn remove_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
-        if !ctx.accounts.vault_state.managers.contains(&ctx.accounts.caller.key()) {
+        if !ctx.accounts.vault_state.role_managers.contains(&ctx.accounts.caller.key()) {
             return Err(MintError::NotManager.into());
         }
 
@@ -291,19 +296,19 @@ pub mod vault {
         Ok(())
     }
 
-    pub fn add_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
+    pub fn add_asset_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
         let caller = ctx.accounts.caller.key();
 
         if caller != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
         }
 
-        let managers = &mut ctx.accounts.vault_state.managers;
+        let managers = &mut ctx.accounts.vault_state.asset_managers;
 
         if !managers.contains(&manager) {
             managers.push(manager);
         } else {
-            return Err(MintError::AlreadyManager.into());
+            return Err(MintError::AlreadyAssetManager.into());
         }
 
         emit!(NewManagerEvent {
@@ -314,12 +319,56 @@ pub mod vault {
         Ok(())
     }
 
-    pub fn remove_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
+    pub fn add_role_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
+        let caller = ctx.accounts.caller.key();
+
+        if caller != ctx.accounts.vault_state.admin {
+            return Err(MintError::NotAdmin.into());
+        }
+
+        let managers = &mut ctx.accounts.vault_state.role_managers;
+
+        if !managers.contains(&manager) {
+            managers.push(manager);
+        } else {
+            return Err(MintError::AlreadyRoleManager.into());
+        }
+
+        emit!(NewManagerEvent {
+            new_manager: manager,
+            added_by: caller,
+        });
+
+        Ok(())
+    }
+
+    pub fn remove_asset_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(MintError::NotAdmin.into());
         }
 
-        let managers = &mut ctx.accounts.vault_state.managers;
+        let managers = &mut ctx.accounts.vault_state.asset_managers;
+
+        if let Some(i) = managers.iter().position(|&x| x == manager) {
+            managers.swap_remove(i);
+        } else {
+            return Err(MintError::NotManagerYet.into());
+        }
+
+        emit!(ManagerRemovedEvent{
+            removed: manager,
+            removed_by: ctx.accounts.caller.key(),
+        });
+
+        Ok(())
+    }
+
+    pub fn remove_role_manager(ctx: Context<Managers>, manager: Pubkey) -> Result<()> {
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
+            return Err(MintError::NotAdmin.into());
+        }
+
+        let managers = &mut ctx.accounts.vault_state.role_managers;
 
         if let Some(i) = managers.iter().position(|&x| x == manager) {
             managers.swap_remove(i);
@@ -493,8 +542,10 @@ pub enum MintError {
     AlreadyRedeemer,
     #[msg("The withdraw address is already whitelisted")]
     AlreadyWithdrawer,
-    #[msg("The provided key is already a manager")]
-    AlreadyManager,
+    #[msg("The provided key is already an asset manager")]
+    AlreadyAssetManager,
+    #[msg("The provided key is already a role manager")]
+    AlreadyRoleManager,
     #[msg("The minter is not whitelisted")]
     MinterNotWhitelisted,
     #[msg("The withdraw address is not whitelisted")]
