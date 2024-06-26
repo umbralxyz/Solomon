@@ -176,6 +176,9 @@ pub mod stake {
             amt,
             ctx.accounts.staking_token.supply,
         )?;
+        if shares == 0 {
+            return Err(StakeError::ZeroShares.into())
+        }
         ctx.accounts.transfer_from_user_to_vault(amt)?;
         ctx.accounts.mint_tokens_to_user(&salt, shares)?;
         ctx.accounts.vault_state.total_assets += amt;
@@ -416,8 +419,6 @@ pub struct AdminTransferEvent {
 
 #[error_code]
 pub enum StakeError {
-    #[msg("Too many tokens requested before cooldown expires")]
-    TooSoon,
     #[msg("The provided key is not yet a rewarder")]
     NotRewarderYet,
     #[msg("The provided key is already a rewarder")]
@@ -440,4 +441,6 @@ pub enum StakeError {
     BadStakingTokenDecimals,
     #[msg("Total shares are below minimum for staking or unstaking")]
     MinSharesViolation,
+    #[msg("Deposit is too small to receive shares")]
+    ZeroShares,
 }
