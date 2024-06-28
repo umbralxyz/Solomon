@@ -40,11 +40,13 @@ describe("vault", () => {
   let vaultCollat: anchor.web3.PublicKey;
   let userCollat: anchor.web3.PublicKey;
   let userVaultToken: anchor.web3.PublicKey;
+  let userTwoTokenMintKey: anchor.web3.Keypair;
 
 
   before(async () => {
     // Initialize keypairs
     userTokenMintKey = anchor.web3.Keypair.generate();
+    userTwoTokenMintKey = anchor.web3.Keypair.generate();
     depositer = anchor.web3.Keypair.generate();
     vaultAuthority = anchor.web3.Keypair.generate();
 
@@ -102,7 +104,7 @@ describe("vault", () => {
     userCollat = await getAssociatedTokenAddress(userTokenMintKey.publicKey, depositer.publicKey);
     userVaultToken = await getAssociatedTokenAddress(vaultMint, depositer.publicKey);
 
-    // Create mint for UserToken
+    // Create mint for UserToken and user ATA
     const userTokenMintTx = new anchor.web3.Transaction().add(
       // Create an account from the depositer mint key
       anchor.web3.SystemProgram.createAccount({
@@ -119,7 +121,25 @@ describe("vault", () => {
     );
 
     await anchor.AnchorProvider.env().sendAndConfirm(userTokenMintTx, [userTokenMintKey]);
+
+    // Create mint for UserTwoToken
+    const userTwoTokenMintTx = new anchor.web3.Transaction().add(
+      // Create an account from the depositer mint key
+      anchor.web3.SystemProgram.createAccount({
+        fromPubkey: adminKey,
+        newAccountPubkey: userTwoTokenMintKey.publicKey,
+        space: MINT_SIZE,
+        programId: TOKEN_PROGRAM_ID,
+        lamports,
+      }),
+      // Create collat mint account that is controlled by anchor wallet
+      createInitializeMintInstruction(userTwoTokenMintKey.publicKey, 9, key, key),
+    );
+
+    await anchor.AnchorProvider.env().sendAndConfirm(userTwoTokenMintTx, [userTwoTokenMintKey]);
+
     console.log("Collat Mint key: ", userTokenMintKey.publicKey.toString());
+    console.log("Collat Two Mint key: ", userTwoTokenMintKey.publicKey.toString());
     
     const createVaultsTx = new anchor.web3.Transaction().add(
       createAssociatedTokenAccountInstruction(adminKey, vaultCollat, vaultAuthority.publicKey, userTokenMintKey.publicKey),
@@ -149,12 +169,19 @@ describe("vault", () => {
     const depositRate = new anchor.BN(1000000000);
     const redeemRate = new anchor.BN(1000000000);
 
-    // Add asset
+    // Add asset one
     const addAssetTx = await program.methods.updateAsset(userTokenMintKey.publicKey, depositRate, redeemRate).accounts({
       authority: adminKey,
       collateralTokenMint: userTokenMintKey.publicKey,
     }).rpc();
-    console.log("Asset added: ", assetKey.toString());
+    console.log("Asset added: ", userTokenMintKey.publicKey.toString());
+
+    // Add asset two
+    const addAssetTwoTx = await program.methods.updateAsset(userTwoTokenMintKey.publicKey, depositRate, redeemRate).accounts({
+      authority: adminKey,
+      collateralTokenMint: userTwoTokenMintKey.publicKey,
+    }).rpc();
+    console.log("Asset added: ", userTwoTokenMintKey.publicKey.toString());
 
     // Whitelist depositer as minter and redeemer
     await program.methods.whitelistMinter(depositer.publicKey).rpc();

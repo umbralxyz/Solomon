@@ -50,7 +50,7 @@ pub struct UpdateAsset<'info> {
     /// The program owned collateral
     #[account(
         init_if_needed,
-        seeds = [TOKEN_ATA_SEED],
+        seeds = [TOKEN_ATA_SEED, asset.as_ref()],
         bump,
         payer = authority,
         token::mint = collateral_token_mint,
@@ -72,27 +72,6 @@ pub struct UpdateAsset<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(asset: Pubkey)]
-pub struct SetRate<'info> {
-    #[account(
-        mut,
-        seeds = [EXCHANGE_RATE_SEED, asset.as_ref()],
-        bump
-    )]
-    pub exchange_rate: Account<'info, ExchangeRate>,
-
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-
-    #[account(mut)]
-    pub authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
 #[instruction(collat: u64)]
 pub struct Deposit<'info> {
     pub system_program: Program<'info, System>,
@@ -101,7 +80,7 @@ pub struct Deposit<'info> {
     /// The program owned collateral
     #[account(
         mut,
-        seeds = [TOKEN_ATA_SEED],
+        seeds = [TOKEN_ATA_SEED, collateral_token_mint.key().as_ref()],
         bump,
     )]
     pub program_collateral: Account<'info, TokenAccount>,
@@ -155,7 +134,7 @@ pub struct Redeem<'info> {
     /// The program owned collateral
     #[account(
         mut,
-        seeds = [TOKEN_ATA_SEED],
+        seeds = [TOKEN_ATA_SEED, collateral_token_mint.key().as_ref()],
         bump,
     )]
     pub program_collateral: Account<'info, TokenAccount>,
@@ -207,7 +186,7 @@ pub struct Withdraw<'info> {
 
     #[account(
         mut,
-        seeds = [TOKEN_ATA_SEED],
+        seeds = [TOKEN_ATA_SEED, collat_mint.key().as_ref()],
         bump
     )]
     pub program_collat: Account<'info, TokenAccount>,
