@@ -182,9 +182,7 @@ pub mod stake {
         ctx.accounts.transfer_from_user_to_vault(amt)?;
         ctx.accounts.mint_tokens_to_user(&salt, shares)?;
         ctx.accounts.vault_state.total_assets += amt;
-
-        ctx.accounts.check_min_shares()?;
-
+        
         emit!(StakeEvent {
             who: ctx.accounts.user.key(),
             assets: amt,
@@ -204,8 +202,6 @@ pub mod stake {
             return Err(StakeError::Blacklisted.into());
         }
 
-        ctx.accounts.check_min_shares()?;
-
         let cd = ctx.accounts.vault_state.cooldown;
         let time = Clock::get()?.unix_timestamp as u32;
         let cd_end = time + cd;
@@ -218,8 +214,6 @@ pub mod stake {
         ctx.accounts.burn_tokens_from_user(shares)?;
         ctx.accounts.vault_state.total_assets -= assets;
         ctx.accounts.user_data.unstake_queue.push_back((cd_end, assets));
-
-        ctx.accounts.check_min_shares()?;
 
         emit!(StartUnstakeEvent {
             who: ctx.accounts.user.key(),
