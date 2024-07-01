@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
+
 use super::*;
 
 #[derive(Accounts)]
@@ -7,6 +8,7 @@ use super::*;
 pub struct InitializeVaultState<'info> {
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
+    pub token_metadata_program: Program<'info, Metadata>,
 
     // todo: space
     #[account(
@@ -28,8 +30,18 @@ pub struct InitializeVaultState<'info> {
     )]
     pub vault_token: Account<'info, Mint>,
 
+    /// CHECK: New Metaplex Account creation
+    #[account(
+        mut,
+        seeds = [b"metadata", token_metadata_program.key().as_ref(), vault_token.key().as_ref()],
+        bump,
+        seeds::program = token_metadata_program.key(),
+    )]
+    pub metadata: UncheckedAccount<'info>,
+
     #[account(mut)]
     pub signer: Signer<'info>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]

@@ -1,5 +1,13 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, MintTo, Transfer};
+use anchor_spl::{
+    token::{self, MintTo, Transfer, Burn},
+    metadata::{
+        create_metadata_accounts_v3,
+        mpl_token_metadata::types::DataV2,
+        CreateMetadataAccountsV3, 
+        Metadata,
+    }, 
+};
 mod context;
 use context::*;
 
@@ -10,6 +18,13 @@ const MINT_SEED: &[u8] = b"mint";
 const TOKEN_ATA_SEED: &[u8] = b"token-account";
 const EXCHANGE_RATE_SEED: &[u8] = b"exchange-rate";
 const VAULT_STATE_SEED: &[u8] = b"vault-state";
+
+#[derive(AnchorSerialize, AnchorDeserialize, Debug, Clone)]
+pub struct MetadataParams {
+    pub name: String,
+    pub symbol: String,
+    pub uri: String,
+}
 
 #[account]
 pub struct VaultState {
@@ -35,14 +50,48 @@ pub struct ExchangeRate {
 
 #[program]
 pub mod vault {
-    use anchor_spl::token::Burn;
-
     use super::*;
 
     pub fn initialize_vault_state(
         ctx: Context<InitializeVaultState>,
         admin: Pubkey,
+        metadata: MetadataParams,
     ) -> Result<()> {
+        let seeds = &[VAULT_STATE_SEED, &[ctx.bumps.vault_state]];
+        let signer = [&seeds[..]];
+
+        let token_data = DataV2 {
+            name: metadata.name,
+            symbol: metadata.symbol,
+            uri: metadata.uri,
+            seller_fee_basis_points: 0,
+            creators: None,
+            collection: None,
+            uses: None,
+        };
+
+        let metadata_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_metadata_program.to_account_info(),
+            CreateMetadataAccountsV3 {
+                payer: ctx.accounts.signer.to_account_info(),
+                update_authority: ctx.accounts.signer.to_account_info(),
+                mint: ctx.accounts.vault_token.to_account_info(),
+                metadata: ctx.accounts.metadata.to_account_info(),
+                mint_authority: ctx.accounts.vault_state.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
+                rent: ctx.accounts.rent.to_account_info(),
+            },
+            &signer
+        );
+
+        create_metadata_accounts_v3(
+            metadata_ctx,
+            token_data,
+            false,
+            true,
+            None,
+        )?;
+
         ctx.accounts.vault_state.approved_minters = vec![admin];
         ctx.accounts.vault_state.approved_redeemers = vec![admin];
         ctx.accounts.vault_state.admin = admin;

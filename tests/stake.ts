@@ -203,8 +203,6 @@ describe("stake", () => {
     callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
     const stakedBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
 
-
-
     const unstake = new anchor.BN(50000);
     const unstakeTwo = new anchor.BN(25000);
 
