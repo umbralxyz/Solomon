@@ -36,8 +36,8 @@ describe("stake", () => {
     [Buffer.from("staking-token"), vaultStatePDA.toBuffer()],
     program.programId
   );
-  const cd = 1;
-  const vestingPeriod = 10;
+  const cd = 0;
+  const vestingPeriod = 3;
   const minShares = new anchor.BN(100);
 
   before(async () => {
@@ -268,7 +268,7 @@ describe("stake", () => {
     }).signers([userTwo]).rpc().catch(e => console.error(e));
 
     // Should fail when commented out or removed
-    await sleep(1000 * (cd));
+    await sleep(1500 * (cd));
 
     await program.methods.unstake(salt, unstakeTwo).accounts({
       userDepositTokenAccount: userTwoUnstaked,
@@ -281,6 +281,9 @@ describe("stake", () => {
     const unstakedTwoAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
     callerInfo = await program.provider.connection.getParsedAccountInfo(userTwoStaked);
     const stakedTwoAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
+    await program.methods.checkAvailableAssets(salt).accounts({
+      user: userTwo.publicKey
+    }).signers([userTwo]).rpc().catch(e => console.error(e));
 
     console.log("User one unstaked tokens before unstaking: ", unstakedBefore);
     console.log("User one staked tokens before unstaking: ", stakedBefore);

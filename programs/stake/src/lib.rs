@@ -182,7 +182,7 @@ pub mod stake {
         ctx.accounts.transfer_from_user_to_vault(amt)?;
         ctx.accounts.mint_tokens_to_user(&salt, shares)?;
         ctx.accounts.vault_state.total_assets += amt;
-        
+
         emit!(StakeEvent {
             who: ctx.accounts.user.key(),
             assets: amt,
@@ -283,6 +283,10 @@ pub mod stake {
         });
 
         Ok(())
+    }
+
+    pub fn check_available_assets(ctx: Context<CheckAssets>, _salt: [u8; 8])-> Result<u64> {
+        Ok(ctx.accounts.user_data.get_available_assets()?)
     }
 }
 

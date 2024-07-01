@@ -42,7 +42,7 @@ pub struct UpdateAsset<'info> {
         init_if_needed, 
         payer = authority, 
         seeds = [EXCHANGE_RATE_SEED, asset.as_ref()],
-        space = 8 + 8 + 8,
+        space = 8 + 8 + 8 + 32,
         bump
     )]
     pub exchange_rate: Account<'info, ExchangeRate>,

@@ -25,6 +25,7 @@ pub struct VaultState {
 
 #[account]
 pub struct ExchangeRate {
+    asset: Pubkey,
     /// The deposit rate is defined in sclaed units of stable coin per asset coin
     /// (1e9)
     deposit_rate: u64,
@@ -63,6 +64,7 @@ pub mod vault {
             return Err(MintError::NotAdmin.into());
         }
 
+        ctx.accounts.exchange_rate.asset = asset;
         ctx.accounts.exchange_rate.deposit_rate = deposit_rate;
         ctx.accounts.exchange_rate.redeem_rate = redeem_rate;
 
