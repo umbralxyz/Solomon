@@ -64,14 +64,7 @@ describe("vault", () => {
     await program.methods.addAssetManager(adminKey).rpc();
     console.log("Added asset manager: ", adminKey.toString());
 
-    // Remove admin from whitelisted minters / redeemers (added by default)
-    await program.methods.removeMinter(adminKey).rpc();
-    console.log("Removed minter: ", adminKey.toString());
-
-    await program.methods.removeRedeemer(adminKey).rpc();
-    console.log("Removed redeemer: ", adminKey.toString());
-
-    // Whitelist minter (add admin back as whitelisted minter / redeemer)
+    // Add admin as whitelisted minter / redeemer
     await program.methods.whitelistMinter(adminKey).rpc();
     console.log("Whitelisted minter: ", adminKey.toString());
 
@@ -219,6 +212,13 @@ describe("vault", () => {
     console.log("User collat tokens after deposit: ", collatTokensAfterDeposit);
     console.log("User vault tokens after redemption: ", vaultTokensAfterRedemption);
     console.log("User collat tokens after redemption: ", collatTokensAfterRedemption);
+
+    // Remove admin from whitelisted minters / redeemers
+    await program.methods.removeMinter(adminKey).rpc();
+    console.log("Removed minter: ", adminKey.toString());
+
+    await program.methods.removeRedeemer(adminKey).rpc();
+    console.log("Removed redeemer: ", adminKey.toString());
   });
   
   it("Add withdrawer and withdraw deposited collateral", async () => {

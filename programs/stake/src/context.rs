@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Mint, Token, TokenAccount, Transfer, MintTo, Burn};
+use anchor_spl::{metadata::Metadata, token::{Burn, Mint, MintTo, Token, TokenAccount, Transfer}};
 use super::*;
 
 #[derive(Accounts)]
@@ -9,8 +9,7 @@ pub struct InitializeVaultState<'info> {
     #[account(
         init, 
         payer = caller, 
-        // todo check space
-        space = 1024, 
+        space = 8 + (3 * 32) + (3 * 8) + (3 * 4) + 1 + (32 * 20), 
         seeds = [VAULT_STATE_SEED, salt.as_ref()], 
         bump
     )]
@@ -53,12 +52,22 @@ pub struct InitializeProgramAccounts<'info> {
         bump
     )]
     pub vault_token_account: Box<Account<'info, TokenAccount>>,
+    /// CHECK: New Metaplex Account creation
+    #[account(
+        mut,
+        seeds = [b"metadata", token_metadata_program.key().as_ref(), staking_token.key().as_ref()],
+        bump,
+        seeds::program = token_metadata_program.key(),
+    )]
+    pub metadata: UncheckedAccount<'info>,
     #[account(mut)]
     pub deposit_token: Box<Account<'info, Mint>>,
     #[account(mut)]
     pub caller: Signer<'info>,
+    pub rent: Sysvar<'info, Rent>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+    pub token_metadata_program: Program<'info, Metadata>,
 }
 
 #[derive(Accounts)]
@@ -97,9 +106,18 @@ pub struct Stake<'info> {
         bump
     )]
     pub vault_token_account: Account<'info, TokenAccount>,
+    #[account(
+        init_if_needed, 
+        payer = user,
+        space = 8 + 32 + 1, 
+        seeds = [VAULT_STATE_SEED, salt.as_ref(), user.key().as_ref()], 
+        bump
+    )]
+    pub blacklisted: Account<'info, Blacklisted>,
     #[account(mut)]
     pub user: Signer<'info>,
     pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 
 impl<'info> Stake<'info> {
@@ -192,6 +210,15 @@ pub struct Unstake<'info> {
         bump
     )]
     pub vault_token_account: Account<'info, TokenAccount>,
+
+    #[account(
+        init_if_needed, 
+        payer = user,
+        space = 8 + 32 + 1, 
+        seeds = [VAULT_STATE_SEED, salt.as_ref(), user.key().as_ref()], 
+        bump
+    )]
+    pub blacklisted: Account<'info, Blacklisted>,
 
     #[account(
         init_if_needed, 
@@ -324,8 +351,17 @@ pub struct Blacklist<'info> {
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
+    #[account(
+        init_if_needed, 
+        payer = caller,
+        space = 8 + 32 + 1, 
+        seeds = [VAULT_STATE_SEED, salt.as_ref(), user.as_ref()], 
+        bump
+    )]
+    pub blacklisted: Account<'info, Blacklisted>,
     #[account(mut)]
     pub caller: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

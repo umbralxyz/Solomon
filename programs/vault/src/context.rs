@@ -14,7 +14,7 @@ pub struct InitializeVaultState<'info> {
     #[account(
         init, 
         payer = signer, 
-        space = 512,
+        space = 8 + 8 + (2 + 20 + 20 + 50) * 32,
         seeds = [VAULT_STATE_SEED],
         bump
     )]
@@ -117,6 +117,12 @@ pub struct Deposit<'info> {
     pub exchange_rate: Account<'info, ExchangeRate>,
     #[account(
         mut,
+        seeds = [VAULT_STATE_SEED, minter.key().as_ref()],
+        bump
+    )]
+    pub user_permissions: Account<'info, Permissions>,
+    #[account(
+        mut,
         constraint = vault_token_mint.key() == vault_state.vault_token_mint,
         seeds = [MINT_SEED],
         bump
@@ -171,6 +177,12 @@ pub struct Redeem<'info> {
     pub exchange_rate: Account<'info, ExchangeRate>,
     #[account(
         mut,
+        seeds = [VAULT_STATE_SEED, redeemer.key().as_ref()],
+        bump
+    )]
+    pub user_permissions: Account<'info, Permissions>,
+    #[account(
+        mut,
         constraint = vault_token_mint.key() == vault_state.vault_token_mint,
         seeds = [MINT_SEED],
         bump,
@@ -218,31 +230,29 @@ pub struct Withdraw<'info> {
 }
 
 #[derive(Accounts)]
-pub struct Minters<'info> {
+#[instruction(user: Pubkey)]
+pub struct UserPermissions<'info> {
     #[account(
         mut,
         seeds = [VAULT_STATE_SEED],
         bump
     )]
     pub vault_state: Account<'info, VaultState>,
+    #[account(
+        init_if_needed, 
+        space = 8 + 32 + 1 + 1,
+        payer = caller,
+        seeds = [VAULT_STATE_SEED, user.as_ref()],
+        bump
+    )]
+    pub user_permissions: Account<'info, Permissions>,
     #[account(mut)]
     pub caller: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct WithdrawAddresses<'info> {
-    #[account(
-        mut,
-        seeds = [VAULT_STATE_SEED],
-        bump
-    )]
-    pub vault_state: Account<'info, VaultState>,
-    #[account(mut)]
-    pub caller: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct Redeemers<'info> {
     #[account(
         mut,
         seeds = [VAULT_STATE_SEED],

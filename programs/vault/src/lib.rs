@@ -29,8 +29,6 @@ pub struct MetadataParams {
 #[account]
 pub struct VaultState {
     pub vault_token_mint: Pubkey,
-    pub approved_minters: Vec<Pubkey>,
-    pub approved_redeemers: Vec<Pubkey>,
     pub asset_managers: Vec<Pubkey>,
     pub role_managers: Vec<Pubkey>,
     pub withdraw_addresses: Vec<Pubkey>,
@@ -46,6 +44,13 @@ pub struct ExchangeRate {
     deposit_rate: u64,
     /// The redeem rate is defined in scaled units of asset coin per stable coin
     redeem_rate: u64,
+}
+
+#[account]
+pub struct Permissions {
+    key: Pubkey,
+    can_mint: bool,
+    can_redeem: bool,
 }
 
 #[program]
@@ -92,8 +97,6 @@ pub mod vault {
             None,
         )?;
 
-        ctx.accounts.vault_state.approved_minters = vec![admin];
-        ctx.accounts.vault_state.approved_redeemers = vec![admin];
         ctx.accounts.vault_state.admin = admin;
         ctx.accounts.vault_state.vault_token_mint = ctx.accounts.vault_token.key();
         ctx.accounts.vault_state.bump = ctx.bumps.vault_state;
@@ -126,16 +129,14 @@ pub mod vault {
     }
 
     pub fn deposit(ctx: Context<Deposit>, collat: u64) -> Result<()> {
-        let state = &ctx.accounts.vault_state;
         let rate = ctx.accounts.exchange_rate.deposit_rate;
         let amt = collat * rate / DECIMALS_SCALAR; 
 
         if rate == 0 {
             return Err(MintError::AssetNotSupported.into());
         }
-
-        let approved_minters = &state.approved_minters;
-        if !approved_minters.contains(&ctx.accounts.minter.key()) {
+        
+        if !ctx.accounts.user_permissions.can_mint {
             return Err(MintError::NotAnApprovedMinter.into());
         }
 
@@ -177,7 +178,6 @@ pub mod vault {
     }
 
     pub fn redeem(ctx: Context<Redeem>, amt: u64) -> Result<()> {
-        let state = &ctx.accounts.vault_state;
         let rate = ctx.accounts.exchange_rate.redeem_rate;
         let decimals = ctx.accounts.collateral_token_mint.decimals;
         let collat = amt * rate / 10_u64.pow(decimals as u32);
@@ -186,8 +186,7 @@ pub mod vault {
             return Err(MintError::AssetNotSupported.into());
         }
 
-        let approved_redeemers = &state.approved_redeemers;
-        if !approved_redeemers.contains(&ctx.accounts.redeemer.key()) {
+        if !ctx.accounts.user_permissions.can_redeem {
             return Err(MintError::NotAnApprovedRedeemer.into());
         }
 
@@ -263,84 +262,60 @@ pub mod vault {
         Ok(())
     }
 
-    pub fn whitelist_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
+    pub fn whitelist_minter(ctx: Context<UserPermissions>, user: Pubkey) -> Result<()> {
         if !ctx.accounts.vault_state.role_managers.contains(&ctx.accounts.caller.key()) {
             return Err(MintError::NotManager.into());
         }
 
-        let approved_minters = &mut ctx.accounts.vault_state.approved_minters;
-
-        if approved_minters.contains(&minter.clone()) {
-            return Err(MintError::AlreadyMinter.into());
-        }
-
-        approved_minters.push(minter);
+        ctx.accounts.user_permissions.can_mint = true;
 
         emit!(NewMinterEvent{
-            new_minter: minter,
+            new_minter: user,
             added_by: ctx.accounts.caller.key(),
         });
 
         Ok(())
     }
 
-    pub fn remove_minter(ctx: Context<Minters>, minter: Pubkey) -> Result<()> {
+    pub fn remove_minter(ctx: Context<UserPermissions>, user: Pubkey) -> Result<()> {
         if !ctx.accounts.vault_state.role_managers.contains(&ctx.accounts.caller.key()) {
             return Err(MintError::NotManager.into());
         }
 
-        let approved_minters = &mut ctx.accounts.vault_state.approved_minters;
-
-        if let Some(i) = approved_minters.iter().position(|&x| x == minter) {
-            approved_minters.swap_remove(i);
-        } else {
-            return Err(MintError::MinterNotWhitelisted.into());
-        }
+        ctx.accounts.user_permissions.can_mint = false;
 
         emit!(MinterRemovedEvent{
-            removed: minter,
+            removed: user,
             removed_by: ctx.accounts.caller.key(),
         });
 
         Ok(())
     }
 
-    pub fn whitelist_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
+    pub fn whitelist_redeemer(ctx: Context<UserPermissions>, user: Pubkey) -> Result<()> {
         if !ctx.accounts.vault_state.role_managers.contains(&ctx.accounts.caller.key()) {
             return Err(MintError::NotManager.into());
         }
 
-        let approved_redeemers = &mut ctx.accounts.vault_state.approved_redeemers;
-
-        if approved_redeemers.contains(&redeemer.clone()) {
-            return Err(MintError::AlreadyRedeemer.into());
-        }
-
-        approved_redeemers.push(redeemer);
+        ctx.accounts.user_permissions.can_redeem = true;
 
         emit!(NewRedeemerEvent{
-            new_redeemer: redeemer,
+            new_redeemer: user,
             added_by: ctx.accounts.caller.key(),
         });
 
         Ok(())
     }
 
-    pub fn remove_redeemer(ctx: Context<Redeemers>, redeemer: Pubkey) -> Result<()> {
+    pub fn remove_redeemer(ctx: Context<UserPermissions>, user: Pubkey) -> Result<()> {
         if !ctx.accounts.vault_state.role_managers.contains(&ctx.accounts.caller.key()) {
             return Err(MintError::NotManager.into());
         }
 
-        let approved_redeemers = &mut ctx.accounts.vault_state.approved_redeemers;
-
-        if let Some(i) = approved_redeemers.iter().position(|&x| x == redeemer) {
-            approved_redeemers.swap_remove(i);
-        } else {
-            return Err(MintError::RedeemerNotWhitelisted.into());
-        }
+        ctx.accounts.user_permissions.can_redeem = false;
 
         emit!(RedeemerRemovedEvent{
-            removed: redeemer,
+            removed: user,
             removed_by: ctx.accounts.caller.key(),
         });
 
@@ -494,6 +469,14 @@ pub mod vault {
         });
 
         Ok(())
+    }
+}
+
+impl VaultState {
+    pub fn new(&mut self) {
+        self.asset_managers = Vec::with_capacity(20);
+        self.role_managers = Vec::with_capacity(20);
+        self.withdraw_addresses = Vec::with_capacity(50);
     }
 }
 

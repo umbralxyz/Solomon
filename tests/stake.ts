@@ -14,6 +14,12 @@ import { assert } from "chai";
 import { BN } from "bn.js";
 
 describe("stake", () => {
+  // Metaplex metadata
+  const metadata = {
+    name: 'Solana Gold',
+    symbol: 'GOLDSOL',
+    uri: 'https://raw.githubusercontent.com/solana-developers/program-examples/new-examples/tokens/tokens/.assets/spl-token.json',
+  };
   anchor.setProvider(anchor.AnchorProvider.env());
   const program = anchor.workspace.Stake as Program<Stake>;
   const adminWallet = anchor.AnchorProvider.env().wallet;
@@ -92,7 +98,7 @@ describe("stake", () => {
     }).rpc().catch(e => console.error(e));
     console.log("Admin: ", adminKey.toString());
 
-    await program.methods.initializeProgramAccounts(salt).accounts({
+    await program.methods.initializeProgramAccounts(salt, metadata).accounts({
       depositToken: unstakedMint.publicKey,
       caller: adminKey,
     }).rpc().catch(e => console.error(e));
@@ -291,6 +297,9 @@ describe("stake", () => {
     console.log("User two staked tokens before unstaking: ", stakedTwoBefore);
     console.log("User two unstaked tokens after unstaking: ", unstakedTwoAfter);
     console.log("User two staked tokens after unstaking: ", stakedTwoAfter);
+
+    await program.methods.blacklist(salt, adminKey).rpc();
+    console.log("Blacklisted user: ", adminKey.toString());
   });
 });
 

@@ -1,7 +1,14 @@
 use std::collections::VecDeque;
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Transfer};
+use anchor_spl::{
+    token::{self, Transfer},
+    metadata::{
+        create_metadata_accounts_v3,
+        mpl_token_metadata::types::DataV2,
+        CreateMetadataAccountsV3,
+    }, 
+};
 mod context;
 use context::*;
 
@@ -12,6 +19,13 @@ const VAULT_TOKEN_ACCOUNT_SEED: &[u8] = b"vault-token-account";
 const USER_DATA_SEED: &[u8] = b"user-data";
 const VAULT_STATE_SEED: &[u8] = b"vault-state";
 
+#[derive(AnchorSerialize, AnchorDeserialize, Debug, Clone)]
+pub struct MetadataParams {
+    pub name: String,
+    pub symbol: String,
+    pub uri: String,
+}
+
 #[account]
 pub struct UserPDA {
     pub assets_available: u64,
@@ -19,24 +33,28 @@ pub struct UserPDA {
 }
 
 #[account]
+pub struct Blacklisted {
+    pub user: Pubkey,
+    pub blacklisted: bool,
+}
+
+#[account]
 pub struct VaultState {
     pub admin: Pubkey,
-    pub bump: u8,
     pub deposit_token: Pubkey,
-    pub cooldown: u32,
     pub vesting_amount: u64,
-    pub last_distribution_time: u32,
     pub total_assets: u64,
     pub min_shares: u64,
+    pub last_distribution_time: u32,
+    pub cooldown: u32,
     pub vesting_period: u32,
+    pub bump: u8,
     pub rewarders: Vec<Pubkey>,
-    pub blacklist: Vec<Pubkey>,
 }
 
 #[program]
 pub mod stake {
     use super::*;
-    use std::vec;
 
     pub fn initialize_vault_state(
         ctx: Context<InitializeVaultState>,
@@ -54,15 +72,51 @@ pub mod stake {
         ctx.accounts.vault_state.total_assets = 0;
         ctx.accounts.vault_state.min_shares = min_shares;
         ctx.accounts.vault_state.vesting_period = 8 * 3600;
-        ctx.accounts.vault_state.blacklist = vec![];
 
         Ok(())
     }
 
     pub fn initialize_program_accounts(
-        _ctx: Context<InitializeProgramAccounts>,
-        _salt: [u8; 8],
+        ctx: Context<InitializeProgramAccounts>,
+        salt: [u8; 8],
+        metadata: MetadataParams,
     ) -> Result<()> {
+
+        let seeds: &[&[u8]] = &[VAULT_STATE_SEED, &salt, &[ctx.accounts.vault_state.bump]];
+        let signer = &[seeds][..];
+
+        let token_data = DataV2 {
+            name: metadata.name,
+            symbol: metadata.symbol,
+            uri: metadata.uri,
+            seller_fee_basis_points: 0,
+            creators: None,
+            collection: None,
+            uses: None,
+        };
+
+        let metadata_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_metadata_program.to_account_info(),
+            CreateMetadataAccountsV3 {
+                payer: ctx.accounts.caller.to_account_info(),
+                update_authority: ctx.accounts.caller.to_account_info(),
+                mint: ctx.accounts.staking_token.to_account_info(),
+                metadata: ctx.accounts.metadata.to_account_info(),
+                mint_authority: ctx.accounts.vault_state.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
+                rent: ctx.accounts.rent.to_account_info(),
+            },
+            &signer
+        );
+
+        create_metadata_accounts_v3(
+            metadata_ctx,
+            token_data,
+            false,
+            true,
+            None,
+        )?;
+
         Ok(())
     }
 
@@ -99,9 +153,8 @@ pub mod stake {
     pub fn blacklist(ctx: Context<Blacklist>, _salt: [u8; 8], user: Pubkey) -> Result<()> {
         if ctx
             .accounts
-            .vault_state
-            .blacklist
-            .contains(&user)
+            .blacklisted
+            .blacklisted
         {
             return Err(StakeError::AlreadyBlacklisted.into());
         }
@@ -110,7 +163,7 @@ pub mod stake {
             return Err(StakeError::NotAdmin.into());
         }
 
-        ctx.accounts.vault_state.blacklist.push(user);
+        ctx.accounts.blacklisted.blacklisted = true;
 
         emit!(AddToBlacklistEvent {
             who: user,
@@ -163,12 +216,7 @@ pub mod stake {
     }
 
     pub fn stake(ctx: Context<Stake>, salt: [u8; 8], amt: u64) -> Result<()> {
-        if ctx
-            .accounts
-            .vault_state
-            .blacklist
-            .contains(&ctx.accounts.user.key())
-        {
+        if ctx.accounts.blacklisted.blacklisted {
             return Err(StakeError::Blacklisted.into());
         }
         
@@ -193,12 +241,7 @@ pub mod stake {
     }
 
     pub fn start_unstake(ctx: Context<Unstake>, _salt: [u8; 8], shares: u64) -> Result<()> {
-        if ctx
-            .accounts
-            .vault_state
-            .blacklist
-            .contains(&ctx.accounts.user.key())
-        {
+        if ctx.accounts.blacklisted.blacklisted {
             return Err(StakeError::Blacklisted.into());
         }
 
@@ -225,12 +268,7 @@ pub mod stake {
     }
 
     pub fn unstake(ctx: Context<Unstake>, salt: [u8; 8], assets: u64) -> Result<()> {
-        if ctx
-            .accounts
-            .vault_state
-            .blacklist
-            .contains(&ctx.accounts.user.key())
-        {
+        if ctx.accounts.blacklisted.blacklisted {
             return Err(StakeError::Blacklisted.into());
         }
 
@@ -326,13 +364,17 @@ impl VaultState {
 
         Ok(amt)
     }
+
+    pub fn new(&mut self) {
+        self.rewarders = Vec::with_capacity(20);
+    }
 }
 
 impl UserPDA {
     pub fn new() -> Self {
         Self {
             assets_available: 0,
-            unstake_queue: VecDeque::with_capacity(10),
+            unstake_queue: VecDeque::with_capacity(100),
         }
     }
 
