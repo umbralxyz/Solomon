@@ -301,6 +301,13 @@ describe("stake", () => {
     await program.methods.blacklist(salt, adminKey).rpc();
     console.log("Blacklisted user: ", adminKey.toString());
   });
+
+  it("Transfer admin", async () => {
+    await program.methods.transferAdmin(userTwo.publicKey, salt).rpc().catch(e => console.error(e));
+    console.log("Transferred admin to: ", userTwo.publicKey.toString());
+    await program.methods.transferAdmin(adminKey, salt).signers([userTwo]).rpc().catch(e => console.error(e));
+    console.log("Transferred admin back to: ", adminKey.toString());
+  });
 });
 
 function sleep(ms: number) {

@@ -326,6 +326,22 @@ pub mod stake {
     pub fn check_available_assets(ctx: Context<CheckAssets>, _salt: [u8; 8])-> Result<u64> {
         Ok(ctx.accounts.user_data.get_available_assets()?)
     }
+
+    pub fn transfer_admin(ctx: Context<TransferAdmin>, new_admin: Pubkey, _salt: [u8; 8]) -> Result<()> {
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
+            return Err(StakeError::NotAdmin.into());
+        }
+
+        let vault_state = &mut ctx.accounts.vault_state;
+        vault_state.admin = new_admin;
+
+        emit!(AdminTransferEvent{
+            old_admin: ctx.accounts.caller.key(),
+            new_admin: new_admin,
+        });
+
+        Ok(())
+    }
 }
 
 impl VaultState {
