@@ -85,7 +85,7 @@ describe("stake", () => {
     await anchor.AnchorProvider.env().sendAndConfirm(unstakedMintTx, [unstakedMint]);
 
     // Mint unstaked tokens to user
-    const mintAmount = 100000;
+    const mintAmount = 100000000000;
     const collatMintTx = new anchor.web3.Transaction().add(
       createMintToInstruction(unstakedMint.publicKey, userUnstaked, adminKey, mintAmount),
     );
@@ -128,7 +128,7 @@ describe("stake", () => {
   
   it("Stake test", async () => {
     const one = new anchor.BN(1)
-    const stake = new anchor.BN(99999);
+    const stake = new anchor.BN(99999999999);
 
     let mintAccountInfo = await program.provider.connection.getParsedAccountInfo(stakingTokenPDA);
     let totalSupply = mintAccountInfo.value.data.parsed.info.supply;
@@ -170,7 +170,7 @@ describe("stake", () => {
   });
 
   it("Reward test", async () => {
-    const reward = new anchor.BN(10000);
+    const reward = new anchor.BN(10000000000);
 
     // Add rewarder
     await program.methods.addRewarder(user.publicKey, salt).accounts({
@@ -181,7 +181,7 @@ describe("stake", () => {
 
     // Mint collat tokens to user one for rewarding to vault
     const collatMintTx = new anchor.web3.Transaction().add(
-      createMintToInstruction(unstakedMint.publicKey, userUnstaked, adminKey, 10000),
+      createMintToInstruction(unstakedMint.publicKey, userUnstaked, adminKey, 10000000000),
     );
 
     await anchor.AnchorProvider.env().sendAndConfirm(collatMintTx, []);
@@ -209,8 +209,8 @@ describe("stake", () => {
     callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
     const stakedBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
 
-    const unstake = new anchor.BN(50000);
-    const unstakeTwo = new anchor.BN(25000);
+    const unstake = new anchor.BN(50000000000);
+    const unstakeTwo = new anchor.BN(25000000000);
 
     //await sleep(1000 * (newCD));
 
@@ -305,7 +305,9 @@ describe("stake", () => {
   it("Transfer admin", async () => {
     await program.methods.transferAdmin(userTwo.publicKey, salt).rpc().catch(e => console.error(e));
     console.log("Transferred admin to: ", userTwo.publicKey.toString());
-    await program.methods.transferAdmin(adminKey, salt).signers([userTwo]).rpc().catch(e => console.error(e));
+    await program.methods.transferAdmin(adminKey, salt).accounts({
+      caller: userTwo.publicKey
+    }).signers([userTwo]).rpc().catch(e => console.error(e));
     console.log("Transferred admin back to: ", adminKey.toString());
   });
 });

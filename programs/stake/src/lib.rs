@@ -352,7 +352,7 @@ impl VaultState {
         }
 
         let total_assets = self.total_assets - self.get_unvested()?;
-        let x = assets * total_supply / total_assets;
+        let x = (assets as u128 * total_supply as u128 / total_assets as u128) as u64;
     
         Ok(x)
     }
@@ -363,7 +363,7 @@ impl VaultState {
         }
         
         let total_assets = self.total_assets - self.get_unvested()?;
-        let x = (shares * total_assets) / total_supply;
+        let x = ((shares as u128 * total_assets as u128) / total_supply as u128) as u64;
 
         Ok(x)
     }
