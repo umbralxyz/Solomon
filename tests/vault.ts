@@ -78,7 +78,7 @@ describe("vault", () => {
     // Get the amount of SOL needed to pay rent for our Token Mint
     const lamports: number = await program.provider.connection.getMinimumBalanceForRentExemption(MINT_SIZE);
 
-    const mintAmount = 10000000000;
+    const mintAmount = 1000000000000;
 
     userCollat = await getAssociatedTokenAddress(tokenOneMintKey.publicKey, depositer.publicKey);
     userVaultToken = await getAssociatedTokenAddress(vaultMint, depositer.publicKey);
@@ -167,8 +167,8 @@ describe("vault", () => {
     await program.methods.whitelistRedeemer(depositer.publicKey).rpc();
     console.log("Whitelisted redeemer: ", adminKey.toString());
 
-    const deposit = new anchor.BN(1000000000);
-    const redeem = new anchor.BN(500000000);
+    const deposit = new anchor.BN(100000000000);
+    const redeem = new anchor.BN(50000000000);
     
     console.log("Caller collat mint: ", userCollat.toString())
     // Get user balances before deposit

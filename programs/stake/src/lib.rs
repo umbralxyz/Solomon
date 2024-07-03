@@ -163,6 +163,7 @@ pub mod stake {
             return Err(StakeError::NotAdmin.into());
         }
 
+        ctx.accounts.blacklisted.user = user;
         ctx.accounts.blacklisted.blacklisted = true;
 
         emit!(AddToBlacklistEvent {

@@ -13,7 +13,7 @@ use context::*;
 
 declare_id!("A3p6U1p5jjZQbu346LrJb1asrTjkEPhDkfH4CXCYgpEd");
 
-const DECIMALS_SCALAR: u64 = 1_000_000_000;
+const DECIMALS_SCALAR: u128 = 1_000_000_000;
 const MINT_SEED: &[u8] = b"mint";
 const TOKEN_ATA_SEED: &[u8] = b"token-account";
 const EXCHANGE_RATE_SEED: &[u8] = b"exchange-rate";
@@ -129,8 +129,8 @@ pub mod vault {
     }
 
     pub fn deposit(ctx: Context<Deposit>, collat: u64) -> Result<()> {
-        let rate = ctx.accounts.exchange_rate.deposit_rate;
-        let amt = collat * rate / DECIMALS_SCALAR; 
+        let rate = ctx.accounts.exchange_rate.deposit_rate as u128;
+        let amt = (collat as u128 * rate / DECIMALS_SCALAR) as u64; 
 
         if rate == 0 {
             return Err(MintError::AssetNotSupported.into());
@@ -178,9 +178,9 @@ pub mod vault {
     }
 
     pub fn redeem(ctx: Context<Redeem>, amt: u64) -> Result<()> {
-        let rate = ctx.accounts.exchange_rate.redeem_rate;
+        let rate = ctx.accounts.exchange_rate.deposit_rate as u128;
         let decimals = ctx.accounts.collateral_token_mint.decimals;
-        let collat = amt * rate / 10_u64.pow(decimals as u32);
+        let collat = (amt as u128 * rate / 10_u128.pow(decimals as u32)) as u64;
 
         if rate == 0 {
             return Err(MintError::AssetNotSupported.into());
