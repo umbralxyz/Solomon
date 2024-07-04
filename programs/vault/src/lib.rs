@@ -267,6 +267,7 @@ pub mod vault {
             return Err(MintError::NotManager.into());
         }
 
+        ctx.accounts.user_permissions.key = user;
         ctx.accounts.user_permissions.can_mint = true;
 
         emit!(NewMinterEvent{
@@ -297,6 +298,7 @@ pub mod vault {
             return Err(MintError::NotManager.into());
         }
 
+        ctx.accounts.user_permissions.key = user;
         ctx.accounts.user_permissions.can_redeem = true;
 
         emit!(NewRedeemerEvent{
