@@ -59,7 +59,7 @@ pub mod stake {
     pub fn initialize_vault_state(
         ctx: Context<InitializeVaultState>,
         admin: Pubkey,
-        _salt: [u8; 8],
+        salt: [u8; 8],
         cooldown: u32,
         min_shares: u64,
     ) -> Result<()> {
@@ -72,6 +72,12 @@ pub mod stake {
         ctx.accounts.vault_state.total_assets = 0;
         ctx.accounts.vault_state.min_shares = min_shares;
         ctx.accounts.vault_state.vesting_period = 8 * 3600;
+
+        emit!(NewVaultEvent{
+            admin: admin,
+            token: ctx.accounts.deposit_token.key(),
+            salt: salt,
+        });
 
         Ok(())
     }
@@ -504,6 +510,13 @@ pub struct AddToBlacklistEvent {
 pub struct AdminTransferEvent {
     old_admin: Pubkey,
     new_admin: Pubkey,
+    salt: [u8; 8],
+}
+
+#[event]
+pub struct NewVaultEvent {
+    admin: Pubkey,
+    token: Pubkey,
     salt: [u8; 8],
 }
 
