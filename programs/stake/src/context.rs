@@ -28,7 +28,8 @@ pub struct InitializeProgramAccounts<'info> {
     /// The vault state for this deposit token and admin
     #[account(
         seeds = [VAULT_STATE_SEED, salt.as_ref()],
-        bump
+        bump,
+        has_one = deposit_token @ StakeError::BadDepositToken
     )]
     pub vault_state: Box<Account<'info, VaultState>>,
 
@@ -42,7 +43,7 @@ pub struct InitializeProgramAccounts<'info> {
     )]
     pub staking_token: Box<Account<'info, Mint>>,
 
-    /// The deposit token ATA for this vault and admin
+    /// The deposit token account for this vault and admin
     #[account(
         init, 
         payer = caller, 
@@ -99,7 +100,7 @@ pub struct Stake<'info> {
         token::authority = user,
     )]
     pub user_staking_token_account: Account<'info, TokenAccount>,
-    /// The vault's ATA for the deposit token
+    /// The vault's account for the deposit token
     #[account(
         mut,
         seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.key().as_ref()],
@@ -203,7 +204,7 @@ pub struct Unstake<'info> {
     )]
     pub user_deposit_token_account: Account<'info, TokenAccount>,
 
-    /// The vaults ATA for the deposit token
+    /// The vault's token account for the deposit token
     #[account(
         mut,
         seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.key().as_ref()],
@@ -303,7 +304,7 @@ pub struct Reward<'info> {
     )]
     pub caller_token_account: Account<'info, TokenAccount>,
 
-    /// The vaults ATA for the deposit token
+    /// The vault's token account for the deposit token
     #[account(
         mut,
         seeds = [VAULT_TOKEN_ACCOUNT_SEED, vault_state.key().as_ref()],

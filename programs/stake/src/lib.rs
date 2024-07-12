@@ -81,6 +81,9 @@ pub mod stake {
         salt: [u8; 8],
         metadata: MetadataParams,
     ) -> Result<()> {
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
+            return Err(StakeError::NotAdmin.into());
+        }
 
         let seeds: &[&[u8]] = &[VAULT_STATE_SEED, &salt, &[ctx.accounts.vault_state.bump]];
         let signer = &[seeds][..];
@@ -120,7 +123,7 @@ pub mod stake {
         Ok(())
     }
 
-    pub fn set_cooldown(ctx: Context<SetCooldown>, _salt: [u8; 8], duration: u32) -> Result<()> {
+    pub fn set_cooldown(ctx: Context<SetCooldown>, salt: [u8; 8], duration: u32) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(StakeError::NotAdmin.into());
         }
@@ -130,14 +133,19 @@ pub mod stake {
         emit!(SetCooldownEvent{
             who: ctx.accounts.caller.key(),
             duration: duration,
+            salt: salt,
         });
 
         Ok(())
     }
 
-    pub fn set_vesting_period(ctx: Context<SetVestingPeriod>, _salt: [u8; 8], duration: u32) -> Result<()> {
+    pub fn set_vesting_period(ctx: Context<SetVestingPeriod>, salt: [u8; 8], duration: u32) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(StakeError::NotAdmin.into());
+        }
+
+        if duration == 0 {
+            return Err(StakeError::InvalidVestingPeriod.into());
         }
 
         ctx.accounts.vault_state.vesting_period = duration;
@@ -145,12 +153,13 @@ pub mod stake {
         emit!(SetVestingPeriodEvent{
             who: ctx.accounts.caller.key(),
             duration: duration,
+            salt: salt,
         });
 
         Ok(())
     }
 
-    pub fn blacklist(ctx: Context<Blacklist>, _salt: [u8; 8], user: Pubkey) -> Result<()> {
+    pub fn blacklist(ctx: Context<Blacklist>, salt: [u8; 8], user: Pubkey) -> Result<()> {
         if ctx
             .accounts
             .blacklisted
@@ -169,12 +178,13 @@ pub mod stake {
         emit!(AddToBlacklistEvent {
             who: user,
             added_by: ctx.accounts.caller.key(),
+            salt: salt,
         });
 
         Ok(())
     }
 
-    pub fn add_rewarder(ctx: Context<Rewarders>, rewarder: Pubkey, _salt: [u8; 8]) -> Result<()> {
+    pub fn add_rewarder(ctx: Context<Rewarders>, rewarder: Pubkey, salt: [u8; 8]) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(StakeError::NotAdmin.into());
         }
@@ -190,12 +200,13 @@ pub mod stake {
         emit!(AddRewarderEvent {
             who: rewarder,
             added_by: ctx.accounts.caller.key(),
+            salt: salt,
         });
 
         Ok(())
     }
 
-    pub fn remove_rewarder(ctx: Context<Rewarders>, rewarder: Pubkey, _salt: [u8; 8]) -> Result<()> {
+    pub fn remove_rewarder(ctx: Context<Rewarders>, rewarder: Pubkey, salt: [u8; 8]) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(StakeError::NotAdmin.into());
         }
@@ -211,6 +222,7 @@ pub mod stake {
         emit!(RemoveRewarderEvent{
             who: rewarder,
             removed_by: ctx.accounts.caller.key(),
+            salt: salt,
         });
 
         Ok(())
@@ -236,12 +248,13 @@ pub mod stake {
             who: ctx.accounts.user.key(),
             assets: amt,
             shares: shares,
+            salt: salt,
         });
 
         Ok(())
     }
 
-    pub fn start_unstake(ctx: Context<Unstake>, _salt: [u8; 8], shares: u64) -> Result<()> {
+    pub fn start_unstake(ctx: Context<Unstake>, salt: [u8; 8], shares: u64) -> Result<()> {
         if ctx.accounts.blacklisted.blacklisted {
             return Err(StakeError::Blacklisted.into());
         }
@@ -263,6 +276,7 @@ pub mod stake {
             who: ctx.accounts.user.key(),
             shares,
             assets,
+            salt: salt,
         });
 
         Ok(())
@@ -286,18 +300,25 @@ pub mod stake {
         emit!(UnstakeEvent {
             who: ctx.accounts.user.key(),
             assets,
+            salt: salt,
         });
 
         Ok(())
     }
 
-    pub fn reward(ctx: Context<Reward>, amt: u64, _salt: [u8; 8]) -> Result<()> {
+    pub fn reward(ctx: Context<Reward>, amt: u64, salt: [u8; 8]) -> Result<()> {
         let state = &mut ctx.accounts.vault_state;
         if !state.rewarders.contains(&ctx.accounts.caller.key()) {
             return Err(StakeError::NotRewarder.into());
         }
 
         let time = Clock::get()?.unix_timestamp as u32;
+        let time_passed = (time - ctx.accounts.vault_state.last_distribution_time) as u64;
+        let vesting_period = ctx.accounts.vault_state.vesting_period as u64;
+    
+        if time_passed < vesting_period {
+            return Err(StakeError::RewardVestingOngoing.into());
+        }
 
         // Transfer unstaked tokens to vault
         let transfer_instruction = Transfer {
@@ -319,6 +340,7 @@ pub mod stake {
         emit!(RewardEvent{
             who: ctx.accounts.caller.key(),
             amt: amt,
+            salt: salt,
         });
 
         Ok(())
@@ -328,7 +350,7 @@ pub mod stake {
         Ok(ctx.accounts.user_data.get_available_assets()?)
     }
 
-    pub fn transfer_admin(ctx: Context<TransferAdmin>, new_admin: Pubkey, _salt: [u8; 8]) -> Result<()> {
+    pub fn transfer_admin(ctx: Context<TransferAdmin>, new_admin: Pubkey, salt: [u8; 8]) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(StakeError::NotAdmin.into());
         }
@@ -339,6 +361,7 @@ pub mod stake {
         emit!(AdminTransferEvent{
             old_admin: ctx.accounts.caller.key(),
             new_admin: new_admin,
+            salt: salt,
         });
 
         Ok(())
@@ -352,7 +375,7 @@ impl VaultState {
         }
 
         let total_assets = self.total_assets - self.get_unvested()?;
-        let x = (assets as u128 * total_supply as u128 / total_assets as u128) as u64;
+        let x = (assets as u128 * total_supply as u128 / total_assets as u128).try_into().unwrap();
     
         Ok(x)
     }
@@ -363,7 +386,7 @@ impl VaultState {
         }
         
         let total_assets = self.total_assets - self.get_unvested()?;
-        let x = ((shares as u128 * total_assets as u128) / total_supply as u128) as u64;
+        let x = ((shares as u128 * total_assets as u128) / total_supply as u128).try_into().unwrap();
 
         Ok(x)
     }
@@ -416,12 +439,14 @@ impl UserPDA {
 pub struct SetVestingPeriodEvent {
     who: Pubkey,
     duration: u32,
+    salt: [u8; 8],
 }
 
 #[event]
 pub struct SetCooldownEvent {
     who: Pubkey,
     duration: u32,
+    salt: [u8; 8],
 }
 
 #[event]
@@ -429,6 +454,7 @@ pub struct StakeEvent {
     who: Pubkey,
     assets: u64,
     shares: u64,
+    salt: [u8; 8],
 }
 
 #[event]
@@ -436,42 +462,49 @@ pub struct StartUnstakeEvent {
     who: Pubkey,
     shares: u64,
     assets: u64,
+    salt: [u8; 8],
 }   
 
 #[event]
 pub struct UnstakeEvent {
     who: Pubkey,
     assets: u64,
+    salt: [u8; 8],
 }   
 
 #[event]
 pub struct RewardEvent {
     who: Pubkey,
     amt: u64,
+    salt: [u8; 8],
 }
 
 #[event]
 pub struct AddRewarderEvent {
     who: Pubkey,
     added_by: Pubkey,
+    salt: [u8; 8],
 }
 
 #[event]
 pub struct RemoveRewarderEvent {
     who: Pubkey,
     removed_by: Pubkey,
+    salt: [u8; 8],
 }
 
 #[event]
 pub struct AddToBlacklistEvent {
     who: Pubkey,
     added_by: Pubkey,
+    salt: [u8; 8],
 }
 
 #[event]
 pub struct AdminTransferEvent {
     old_admin: Pubkey,
     new_admin: Pubkey,
+    salt: [u8; 8],
 }
 
 #[error_code]
@@ -500,4 +533,10 @@ pub enum StakeError {
     MinSharesViolation,
     #[msg("Deposit is too small to receive shares")]
     ZeroShares,
+    #[msg("Bad Deposit Token")]
+    BadDepositToken,
+    #[msg("Reward vesting is ongoing")]
+    RewardVestingOngoing,
+    #[msg("Vesting period must be non-zero")]
+    InvalidVestingPeriod,
 }
