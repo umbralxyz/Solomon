@@ -9,7 +9,7 @@ pub struct InitializeVaultState<'info> {
     #[account(
         init, 
         payer = caller, 
-        space = 8 + (3 * 32) + (3 * 8) + (3 * 4) + 1 + (32 * 20), 
+        space = 8 + (2 * 32) + (3 * 8) + (3 * 4) + 1 + (32 * 20), 
         seeds = [VAULT_STATE_SEED, salt.as_ref()], 
         bump
     )]
@@ -411,3 +411,29 @@ pub struct CheckAssets<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 }
+
+#[derive(Accounts)]
+#[instruction(salt: [u8; 8])]
+pub struct RefreshCooldowns<'info> {
+    #[account(
+        mut,
+        seeds = [VAULT_STATE_SEED, salt.as_ref()], 
+        bump
+    )]
+    pub vault_state: Account<'info, VaultState>,
+
+    #[account(
+        init_if_needed, 
+        payer = user, 
+        space = 8 + 8 + 100 * 12, 
+        seeds = [USER_DATA_SEED, user.key().as_ref(), vault_state.key().as_ref()], 
+        bump
+    )]
+    pub user_data: Account<'info, UserPDA>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+

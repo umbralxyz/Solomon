@@ -42,7 +42,8 @@ describe("stake", () => {
     [Buffer.from("staking-token"), vaultStatePDA.toBuffer()],
     program.programId
   );
-  const cd = 0;
+  const slowCD = 10000;
+  const fastCD = 0;
   const vestingPeriod = 3;
   const minShares = new anchor.BN(100);
 
@@ -92,7 +93,7 @@ describe("stake", () => {
     await anchor.AnchorProvider.env().sendAndConfirm(collatMintTx, []);
 
     // Initialize staking vault and token accounts
-    await program.methods.initializeVaultState(adminKey, salt, 0, minShares).accounts({
+    await program.methods.initializeVaultState(adminKey, salt, slowCD, minShares).accounts({
       depositToken: unstakedMint.publicKey,
       caller: adminKey,
     }).rpc().catch(e => console.error(e));
@@ -117,10 +118,7 @@ describe("stake", () => {
     );
     await anchor.AnchorProvider.env().sendAndConfirm(initUserTwoStaked, []);
 
-    // Set CD and vesting period
-    await program.methods.setCooldown(salt, cd).rpc();
-    console.log("Set staking cooldown to: ", cd.toString());
-
+    // Set vesting period
     await program.methods.setVestingPeriod(salt, vestingPeriod).rpc();
     console.log("Set vesting period to: ", vestingPeriod.toString());
   });
@@ -203,18 +201,24 @@ describe("stake", () => {
   });
   
   it("Unstake test", async () => {
+    const unstake = new anchor.BN(50000000000);
+    const unstakeTwo = new anchor.BN(25000000000);
+
+    // Transfer half to user two
+    const transfer = new anchor.web3.Transaction().add(
+      createTransferInstruction(userStaked, userTwoStaked, user.publicKey, unstake.toNumber())
+    );
+    await anchor.AnchorProvider.env().sendAndConfirm(transfer, [user]);
+
     // Get balances of user before
     let callerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
     const unstakedBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
     callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
     const stakedBefore = callerInfo.value.data.parsed.info.tokenAmount.amount;
 
-    const unstake = new anchor.BN(50000000000);
-    const unstakeTwo = new anchor.BN(25000000000);
-
     //await sleep(1000 * (newCD));
 
-    // Unstake half as user one
+    // Unstake as user one
     await program.methods.startUnstake(salt, unstake).accounts({
       userDepositTokenAccount: userUnstaked,
       userStakingTokenAccount: userStaked,
@@ -222,25 +226,7 @@ describe("stake", () => {
     }).signers([user]).rpc().catch(e => console.error(e));
 
     // Should fail when commented out or removed
-    await sleep(1000 * (cd));
-
-    await program.methods.unstake(salt, unstake).accounts({
-      userDepositTokenAccount: userUnstaked,
-      userStakingTokenAccount: userStaked,
-      user: user.publicKey
-    }).signers([user]).rpc().catch(e => console.error(e));
-
-    // Get balances of user after (no deposits withdrawn because insufficent time has passed)
-    callerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
-    const unstakedAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
-    callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
-    const stakedAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
-
-    // Transfer other half to user two
-    const transfer = new anchor.web3.Transaction().add(
-      createTransferInstruction(userStaked, userTwoStaked, user.publicKey, unstakedAfter)
-    );
-    await anchor.AnchorProvider.env().sendAndConfirm(transfer, [user]);
+    await sleep(1000 * (fastCD));
 
     // Get balances of user two after transfer / before unstake
     callerInfo = await program.provider.connection.getParsedAccountInfo(userTwoUnstaked);
@@ -255,24 +241,42 @@ describe("stake", () => {
       user: userTwo.publicKey
     }).signers([userTwo]).rpc().catch(e => console.error(e));
 
-    // Should fail when commented out or removed
-    await sleep(1000 * (cd));
-
-    await program.methods.unstake(salt, unstakeTwo).accounts({
-      userDepositTokenAccount: userTwoUnstaked,
-      userStakingTokenAccount: userTwoStaked,
-      user: userTwo.publicKey
-    }).signers([userTwo]).rpc().catch(e => console.error(e));
-
-    // Unstake remainder as user two (should fail due to cooldown)
+    // Unstake remainder as user two 
     await program.methods.startUnstake(salt, unstakeTwo).accounts({
       userDepositTokenAccount: userTwoUnstaked,
       userStakingTokenAccount: userTwoStaked,
       user: userTwo.publicKey
     }).signers([userTwo]).rpc().catch(e => console.error(e));
 
+    // Set fast cooldown and refresh user one cooldowns
+    await program.methods.setCooldown(salt, fastCD).rpc();
+    console.log("Set staking cooldown to: ", fastCD.toString());
+
+    await program.methods.refreshCooldowns(salt).accounts({
+      user: user.publicKey
+    }).signers([user]).rpc().catch(e => console.error(e));
+    console.log("Refreshed cooldowns for user: ", user.publicKey.toString())
+
+    await program.methods.refreshCooldowns(salt).accounts({
+      user: userTwo.publicKey
+    }).signers([userTwo]).rpc().catch(e => console.error(e));
+    console.log("Refreshed cooldowns for user: ", userTwo.publicKey.toString())
+
     // Should fail when commented out or removed
-    await sleep(1500 * (cd));
+    await sleep(1000 * (fastCD));
+
+    // Finish unstaking
+    await program.methods.unstake(salt, unstakeTwo).accounts({
+      userDepositTokenAccount: userTwoUnstaked,
+      userStakingTokenAccount: userTwoStaked,
+      user: userTwo.publicKey
+    }).signers([userTwo]).rpc().catch(e => console.error(e));
+
+    await program.methods.unstake(salt, unstake).accounts({
+      userDepositTokenAccount: userUnstaked,
+      userStakingTokenAccount: userStaked,
+      user: user.publicKey
+    }).signers([user]).rpc().catch(e => console.error(e));
 
     await program.methods.unstake(salt, unstakeTwo).accounts({
       userDepositTokenAccount: userTwoUnstaked,
@@ -281,6 +285,10 @@ describe("stake", () => {
     }).signers([userTwo]).rpc().catch(e => console.error(e));
 
     // Get balances of user after cooldown has passed
+    callerInfo = await program.provider.connection.getParsedAccountInfo(userUnstaked);
+    const unstakedAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
+    callerInfo = await program.provider.connection.getParsedAccountInfo(userStaked);
+    const stakedAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
     callerInfo = await program.provider.connection.getParsedAccountInfo(userTwoUnstaked);
     const unstakedTwoAfter = callerInfo.value.data.parsed.info.tokenAmount.amount;
     callerInfo = await program.provider.connection.getParsedAccountInfo(userTwoStaked);
@@ -300,6 +308,9 @@ describe("stake", () => {
 
     await program.methods.blacklist(salt, adminKey).rpc();
     console.log("Blacklisted user: ", adminKey.toString());
+
+    await program.methods.removeFromBlacklist(salt, adminKey).rpc();
+    console.log("Unblacklisted user: ", adminKey.toString());
   });
 
   it("Transfer admin", async () => {

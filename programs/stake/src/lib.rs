@@ -190,6 +190,31 @@ pub mod stake {
         Ok(())
     }
 
+    pub fn remove_from_blacklist(ctx: Context<Blacklist>, salt: [u8; 8], user: Pubkey) -> Result<()> {
+        if !ctx
+            .accounts
+            .blacklisted
+            .blacklisted
+        {
+            return Err(StakeError::NotBlacklisted.into());
+        }
+
+        if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
+            return Err(StakeError::NotAdmin.into());
+        }
+
+        ctx.accounts.blacklisted.user = user;
+        ctx.accounts.blacklisted.blacklisted = false;
+
+        emit!(RemoveFromBlacklistEvent {
+            who: user,
+            added_by: ctx.accounts.caller.key(),
+            salt: salt,
+        });
+
+        Ok(())
+    }
+
     pub fn add_rewarder(ctx: Context<Rewarders>, rewarder: Pubkey, salt: [u8; 8]) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(StakeError::NotAdmin.into());
@@ -356,6 +381,18 @@ pub mod stake {
         Ok(ctx.accounts.user_data.get_available_assets()?)
     }
 
+    pub fn refresh_cooldowns(ctx: Context<RefreshCooldowns>, _salt: [u8; 8]) -> Result<()> {
+        let current_cd_end = ctx.accounts.vault_state.cooldown + Clock::get()?.unix_timestamp as u32;
+        let cooldowns = &mut ctx.accounts.user_data.unstake_queue;
+        for cd in cooldowns.iter_mut() {
+            if current_cd_end < cd.0 {
+                cd.0 = current_cd_end;
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn transfer_admin(ctx: Context<TransferAdmin>, new_admin: Pubkey, salt: [u8; 8]) -> Result<()> {
         if ctx.accounts.caller.key() != ctx.accounts.vault_state.admin {
             return Err(StakeError::NotAdmin.into());
@@ -507,6 +544,13 @@ pub struct AddToBlacklistEvent {
 }
 
 #[event]
+pub struct RemoveFromBlacklistEvent {
+    who: Pubkey,
+    added_by: Pubkey,
+    salt: [u8; 8],
+}
+
+#[event]
 pub struct AdminTransferEvent {
     old_admin: Pubkey,
     new_admin: Pubkey,
@@ -528,6 +572,8 @@ pub enum StakeError {
     AlreadyRewarder,
     #[msg("The provided key is already blacklisted")]
     AlreadyBlacklisted,
+    #[msg("The provided key is not currently blacklisted")]
+    NotBlacklisted,
     #[msg("The caller is not an admin")]
     NotAdmin,
     #[msg("The caller is not a rewarder")]
