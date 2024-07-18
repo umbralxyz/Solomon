@@ -62,7 +62,7 @@ pub struct UpdateAsset<'info> {
     /// The program owned collateral
     #[account(
         init_if_needed,
-        seeds = [TOKEN_ATA_SEED, asset.as_ref()],
+        seeds = [TOKEN_ACCOUNT_SEED, asset.as_ref()],
         bump,
         payer = authority,
         token::mint = collateral_token_mint,
@@ -92,7 +92,7 @@ pub struct Deposit<'info> {
     /// The program owned collateral
     #[account(
         mut,
-        seeds = [TOKEN_ATA_SEED, collateral_token_mint.key().as_ref()],
+        seeds = [TOKEN_ACCOUNT_SEED, collateral_token_mint.key().as_ref()],
         bump,
     )]
     pub program_collateral: Account<'info, TokenAccount>,
@@ -103,7 +103,7 @@ pub struct Deposit<'info> {
         token::authority = minter,
     )]
     pub caller_collateral: Account<'info, TokenAccount>,
-    /// The caller owned vault token ATA
+    /// The caller owned vault token account
     #[account(
         mut,
         token::mint = vault_token_mint,
@@ -152,7 +152,7 @@ pub struct Redeem<'info> {
     /// The program owned collateral
     #[account(
         mut,
-        seeds = [TOKEN_ATA_SEED, collateral_token_mint.key().as_ref()],
+        seeds = [TOKEN_ACCOUNT_SEED, collateral_token_mint.key().as_ref()],
         bump,
     )]
     pub program_collateral: Account<'info, TokenAccount>,
@@ -163,7 +163,7 @@ pub struct Redeem<'info> {
         token::authority = redeemer,
     )]
     pub caller_collateral: Account<'info, TokenAccount>,
-    /// The caller owned vault token ATA
+    /// The caller owned vault token account
     #[account(
         mut,
         token::mint = vault_token_mint,
@@ -210,7 +210,7 @@ pub struct Withdraw<'info> {
 
     #[account(
         mut,
-        seeds = [TOKEN_ATA_SEED, collat_mint.key().as_ref()],
+        seeds = [TOKEN_ACCOUNT_SEED, collat_mint.key().as_ref()],
         bump
     )]
     pub program_collat: Account<'info, TokenAccount>,

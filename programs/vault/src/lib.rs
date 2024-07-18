@@ -14,8 +14,10 @@ use context::*;
 declare_id!("A3p6U1p5jjZQbu346LrJb1asrTjkEPhDkfH4CXCYgpEd");
 
 const DECIMALS_SCALAR: u128 = 1_000_000_000;
+const MAX_WITHDRAW_ADRESSES: usize = 50;
+const MAX_MANAGER_ADDRESSES: usize = 20;
 const MINT_SEED: &[u8] = b"mint";
-const TOKEN_ATA_SEED: &[u8] = b"token-account";
+const TOKEN_ACCOUNT_SEED: &[u8] = b"token-account";
 const EXCHANGE_RATE_SEED: &[u8] = b"exchange-rate";
 const VAULT_STATE_SEED: &[u8] = b"vault-state";
 
@@ -39,7 +41,7 @@ pub struct VaultState {
 #[account]
 pub struct ExchangeRate {
     asset: Pubkey,
-    /// The deposit rate is defined in sclaed units of stable coin per asset coin
+    /// The deposit rate is defined in scaled units of stable coin per asset coin
     /// (1e9)
     deposit_rate: u64,
     /// The redeem rate is defined in scaled units of asset coin per stable coin
@@ -123,6 +125,8 @@ pub mod vault {
         emit!(AssetModifiedEvent{
             who: ctx.accounts.authority.key(),
             asset: asset,
+            deposit_rate,
+            redeem_rate,
         });
 
         Ok(())
@@ -130,7 +134,7 @@ pub mod vault {
 
     pub fn deposit(ctx: Context<Deposit>, collat: u64) -> Result<()> {
         let rate = ctx.accounts.exchange_rate.deposit_rate as u128;
-        let amt = (collat as u128 * rate / DECIMALS_SCALAR) as u64; 
+        let amt: u64 = (collat as u128 * rate / DECIMALS_SCALAR).try_into().unwrap(); 
 
         if rate == 0 {
             return Err(MintError::AssetNotSupported.into());
@@ -171,6 +175,7 @@ pub mod vault {
 
         emit!(DepositEvent{
             who: ctx.accounts.minter.key(),
+            token_mint: ctx.accounts.collateral_token_mint.key(),
             amt: collat,
         });
 
@@ -178,9 +183,9 @@ pub mod vault {
     }
 
     pub fn redeem(ctx: Context<Redeem>, amt: u64) -> Result<()> {
-        let rate = ctx.accounts.exchange_rate.deposit_rate as u128;
+        let rate = ctx.accounts.exchange_rate.redeem_rate as u128;
         let decimals = ctx.accounts.collateral_token_mint.decimals;
-        let collat = (amt as u128 * rate / 10_u128.pow(decimals as u32)) as u64;
+        let collat: u64 = (amt as u128 * rate / 10_u128.pow(decimals as u32)).try_into().unwrap();
 
         if rate == 0 {
             return Err(MintError::AssetNotSupported.into());
@@ -221,6 +226,7 @@ pub mod vault {
 
         emit!(RedeemEvent{
             who: ctx.accounts.redeemer.key(),
+            token_mint: ctx.accounts.collateral_token_mint.key(),
             amt: amt,
         });
 
@@ -256,6 +262,7 @@ pub mod vault {
 
         emit!(WithdrawEvent {
             who: *destination,
+            token_mint: ctx.accounts.collat_mint.key(),
             amt: amt,
         });
 
@@ -333,14 +340,18 @@ pub mod vault {
 
         let managers = &mut ctx.accounts.vault_state.asset_managers;
 
+        if managers.len() > MAX_MANAGER_ADDRESSES {
+            return Err(MintError::MaxArrayLength.into());
+        }
+
         if !managers.contains(&manager) {
             managers.push(manager);
         } else {
             return Err(MintError::AlreadyAssetManager.into());
         }
 
-        emit!(NewManagerEvent {
-            new_manager: manager,
+        emit!(NewAssetManagerEvent {
+            new_asset_manager: manager,
             added_by: caller,
         });
 
@@ -356,14 +367,18 @@ pub mod vault {
 
         let managers = &mut ctx.accounts.vault_state.role_managers;
 
+        if managers.len() > MAX_MANAGER_ADDRESSES {
+            return Err(MintError::MaxArrayLength.into());
+        }
+
         if !managers.contains(&manager) {
             managers.push(manager);
         } else {
             return Err(MintError::AlreadyRoleManager.into());
         }
 
-        emit!(NewManagerEvent {
-            new_manager: manager,
+        emit!(NewRoleManagerEvent {
+            new_role_manager: manager,
             added_by: caller,
         });
 
@@ -383,8 +398,8 @@ pub mod vault {
             return Err(MintError::NotManagerYet.into());
         }
 
-        emit!(ManagerRemovedEvent{
-            removed: manager,
+        emit!(AssetManagerRemovedEvent{
+            asset_manager_removed: manager,
             removed_by: ctx.accounts.caller.key(),
         });
 
@@ -404,8 +419,8 @@ pub mod vault {
             return Err(MintError::NotManagerYet.into());
         }
 
-        emit!(ManagerRemovedEvent{
-            removed: manager,
+        emit!(RoleManagerRemovedEvent{
+            role_manager_removed: manager,
             removed_by: ctx.accounts.caller.key(),
         });
 
@@ -420,6 +435,10 @@ pub mod vault {
         }
 
         let withdraw_addresses = &mut ctx.accounts.vault_state.withdraw_addresses;
+
+        if withdraw_addresses.len() > MAX_WITHDRAW_ADRESSES {
+            return Err(MintError::MaxArrayLength.into());
+        }
 
         if !withdraw_addresses.contains(&address) {
             withdraw_addresses.push(address);
@@ -486,23 +505,28 @@ impl VaultState {
 pub struct AssetModifiedEvent {
     who: Pubkey,
     asset: Pubkey,
+    deposit_rate: u64,
+    redeem_rate: u64,
 }
 
 #[event]
 pub struct DepositEvent {
     who: Pubkey,
+    token_mint: Pubkey,
     amt: u64,
 }
 
 #[event]
 pub struct WithdrawEvent {
     who: Pubkey,
+    token_mint: Pubkey,
     amt: u64,
 }
 
 #[event]
 pub struct RedeemEvent {
     who: Pubkey,
+    token_mint: Pubkey,
     amt: u64,
 }
 
@@ -543,14 +567,26 @@ pub struct RedeemerRemovedEvent {
 }
 
 #[event]
-pub struct NewManagerEvent {
-    new_manager: Pubkey,
+pub struct NewAssetManagerEvent {
+    new_asset_manager: Pubkey,
     added_by: Pubkey,
 }
 
 #[event]
-pub struct ManagerRemovedEvent {
-    removed: Pubkey,
+pub struct NewRoleManagerEvent {
+    new_role_manager: Pubkey,
+    added_by: Pubkey,
+}
+
+#[event]
+pub struct AssetManagerRemovedEvent {
+    asset_manager_removed: Pubkey,
+    removed_by: Pubkey,
+}
+
+#[event]
+pub struct RoleManagerRemovedEvent {
+    role_manager_removed: Pubkey,
     removed_by: Pubkey,
 }
 
@@ -600,4 +636,6 @@ pub enum MintError {
     AssetNotSupported,
     #[msg("Asset already supported by mint vault")]
     AssetAlreadySupported,
+    #[msg("Max array length has been exceeded")]
+    MaxArrayLength,
 }
