@@ -134,7 +134,13 @@ pub mod vault {
 
     pub fn deposit(ctx: Context<Deposit>, collat: u64) -> Result<()> {
         let rate = ctx.accounts.exchange_rate.deposit_rate as u128;
-        let amt: u64 = (collat as u128 * rate / DECIMALS_SCALAR).try_into().unwrap(); 
+        let decimals = ctx.accounts.collateral_token_mint.decimals;
+        let collat_adjusted =  if decimals < 9 {
+            collat * 10_u64.pow(9 - decimals as u32)
+        } else {
+            collat
+        };
+        let amt: u64 = (collat_adjusted as u128 * rate / DECIMALS_SCALAR).try_into().unwrap();
 
         if rate == 0 {
             return Err(MintError::AssetNotSupported.into());
@@ -185,7 +191,12 @@ pub mod vault {
     pub fn redeem(ctx: Context<Redeem>, amt: u64) -> Result<()> {
         let rate = ctx.accounts.exchange_rate.redeem_rate as u128;
         let decimals = ctx.accounts.collateral_token_mint.decimals;
-        let collat: u64 = (amt as u128 * rate / 10_u128.pow(decimals as u32)).try_into().unwrap();
+        let collat_raw: u64 = (amt as u128 * rate / DECIMALS_SCALAR).try_into().unwrap();
+        let collat = if decimals < 9 {
+            collat_raw / 10_u64.pow(9 - decimals as u32)
+        } else {
+            collat_raw
+        };
 
         if rate == 0 {
             return Err(MintError::AssetNotSupported.into());

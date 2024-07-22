@@ -94,7 +94,7 @@ describe("vault", () => {
         lamports,
       }),
       // Create collat mint account that is controlled by anchor wallet
-      createInitializeMintInstruction(tokenOneMintKey.publicKey, 9, key, key),
+      createInitializeMintInstruction(tokenOneMintKey.publicKey, 6, key, key),
       // Create the ATA account that is associated with collat mint on anchor wallet
       createAssociatedTokenAccountInstruction(key, userCollat, depositer.publicKey, tokenOneMintKey.publicKey),
     );
@@ -112,7 +112,7 @@ describe("vault", () => {
         lamports,
       }),
       // Create collat mint account that is controlled by anchor wallet
-      createInitializeMintInstruction(tokenTwoMintKey.publicKey, 9, key, key),
+      createInitializeMintInstruction(tokenTwoMintKey.publicKey, 6, key, key),
     );
 
     await anchor.AnchorProvider.env().sendAndConfirm(userTwoTokenMintTx, [tokenTwoMintKey]);
@@ -167,7 +167,7 @@ describe("vault", () => {
     await program.methods.whitelistRedeemer(depositer.publicKey).rpc();
     console.log("Whitelisted redeemer: ", adminKey.toString());
 
-    const deposit = new anchor.BN(100000000000);
+    const deposit = new anchor.BN(123456789100);
     const redeem = new anchor.BN(50000000000);
     
     console.log("Caller collat mint: ", userCollat.toString())
